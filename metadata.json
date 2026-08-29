@@ -1,0 +1,7 @@
+{
+  "name": "Reflex — Retail Delivery Visibility",
+  "description": "Lightweight delivery-visibility and workflow tracking tool for small retailers, dispatchers, and riders.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
