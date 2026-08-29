@@ -14,6 +14,7 @@ from .services import (
     assign_rider,
     calculate_delivery_health,
     create_delivery,
+    update_delivery_status,
 )
 
 
@@ -339,3 +340,150 @@ class AssignRiderTests(TestCase):
             self.delivery.assigned_rider,
             self.rider,
         )            
+        
+class UpdateDeliveryStatusTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+
+        self.retailer = User.objects.create_user(
+            email="retailer-status@reflex.test",
+            password="test-password",
+            name="Test Retailer",
+            role=User.Role.RETAILER,
+        )
+
+        self.dispatcher = User.objects.create_user(
+            email="dispatcher-status@reflex.test",
+            password="test-password",
+            name="Test Dispatcher",
+            role=User.Role.DISPATCHER,
+        )
+
+        self.rider = User.objects.create_user(
+            email="rider-status@reflex.test",
+            password="test-password",
+            name="Brian Rider",
+            role=User.Role.RIDER,
+        )
+
+        self.other_rider = User.objects.create_user(
+            email="other-rider-status@reflex.test",
+            password="test-password",
+            name="Amina Rider",
+            role=User.Role.RIDER,
+        )
+
+        expected_delivery_at = datetime(
+            2026,
+            8,
+            30,
+            14,
+            0,
+            tzinfo=dt_timezone.utc,
+        )
+
+        self.delivery = create_delivery(
+            retailer=self.retailer,
+            customer_name="Peter Mwangi",
+            customer_phone="0712345678",
+            delivery_address="Nyeri",
+            item_description="Printer",
+            expected_delivery_at=expected_delivery_at,
+        )
+
+        self.delivery = assign_rider(
+            dispatcher=self.dispatcher,
+            delivery_id=self.delivery.id,
+            rider=self.rider,
+        )
+
+    def test_assigned_rider_can_mark_delivery_picked_up(self):
+        delivery = update_delivery_status(
+            rider=self.rider,
+            delivery_id=self.delivery.id,
+            new_status=Delivery.Status.PICKED_UP,
+        )
+
+        self.assertEqual(
+            delivery.status,
+            Delivery.Status.PICKED_UP,
+        )
+        self.assertIsNotNone(delivery.picked_up_at)
+
+        event = delivery.events.get(
+            event_type=DeliveryEvent.EventType.STATUS_CHANGED
+        )
+
+        self.assertEqual(event.actor, self.rider)
+        self.assertEqual(
+            event.from_status,
+            Delivery.Status.ASSIGNED,
+        )
+        self.assertEqual(
+            event.to_status,
+            Delivery.Status.PICKED_UP,
+        )
+
+    def test_picked_up_delivery_can_move_to_in_transit(self):
+        update_delivery_status(
+            rider=self.rider,
+            delivery_id=self.delivery.id,
+            new_status=Delivery.Status.PICKED_UP,
+        )
+
+        delivery = update_delivery_status(
+            rider=self.rider,
+            delivery_id=self.delivery.id,
+            new_status=Delivery.Status.IN_TRANSIT,
+        )
+
+        self.assertEqual(
+            delivery.status,
+            Delivery.Status.IN_TRANSIT,
+        )
+        self.assertIsNotNone(delivery.in_transit_at)
+
+    def test_wrong_rider_cannot_update_delivery(self):
+        with self.assertRaises(PermissionDenied):
+            update_delivery_status(
+                rider=self.other_rider,
+                delivery_id=self.delivery.id,
+                new_status=Delivery.Status.PICKED_UP,
+            )
+
+        self.delivery.refresh_from_db()
+
+        self.assertEqual(
+            self.delivery.status,
+            Delivery.Status.ASSIGNED,
+        )
+
+    def test_assigned_delivery_cannot_skip_pickup(self):
+        with self.assertRaises(DeliveryConflict):
+            update_delivery_status(
+                rider=self.rider,
+                delivery_id=self.delivery.id,
+                new_status=Delivery.Status.IN_TRANSIT,
+            )
+
+        self.delivery.refresh_from_db()
+
+        self.assertEqual(
+            self.delivery.status,
+            Delivery.Status.ASSIGNED,
+        )
+
+    def test_delivered_status_cannot_be_set_through_status_service(self):
+        with self.assertRaises(DeliveryConflict):
+            update_delivery_status(
+                rider=self.rider,
+                delivery_id=self.delivery.id,
+                new_status=Delivery.Status.DELIVERED,
+            )
+
+        self.delivery.refresh_from_db()
+
+        self.assertEqual(
+            self.delivery.status,
+            Delivery.Status.ASSIGNED,
+        )
