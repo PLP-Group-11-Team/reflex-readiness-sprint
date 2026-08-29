@@ -115,3 +115,28 @@ class DeliveryDetailSerializer(serializers.ModelSerializer):
             return obj.confirmation_token
 
         return None
+    
+    
+class DeliveryCreateSerializer(serializers.Serializer):
+    customer_name = serializers.CharField(max_length=150)
+    customer_phone = serializers.CharField(max_length=30)
+    delivery_address = serializers.CharField()
+    item_description = serializers.CharField()
+    expected_delivery_at = serializers.DateTimeField()
+
+
+class AssignRiderSerializer(serializers.Serializer):
+    rider_id = serializers.IntegerField()
+
+
+class StatusUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=Delivery.Status.choices
+    )
+
+
+class ConfirmDeliverySerializer(serializers.Serializer):
+    token = serializers.CharField(
+        allow_blank=False,
+        trim_whitespace=True,
+    )
