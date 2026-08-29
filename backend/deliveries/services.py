@@ -2,6 +2,10 @@ from datetime import timedelta
 
 from django.utils import timezone
 
+from django.core.exceptions import PermissionDenied
+from django.db import transaction
+
+from .models import Delivery, DeliveryEvent
 
 AT_RISK_WINDOW = timedelta(minutes=30)
 
@@ -42,3 +46,65 @@ def calculate_delivery_health(delivery, now=None):
         return DeliveryHealth.AT_RISK
 
     return DeliveryHealth.ON_TIME
+
+def record_delivery_event(
+    *,
+    delivery,
+    actor,
+    event_type,
+    from_status=None,
+    to_status=None,
+):
+    event = DeliveryEvent(
+        delivery=delivery,
+        actor=actor,
+        event_type=event_type,
+        from_status=from_status,
+        to_status=to_status,
+    )
+
+    event.full_clean()
+    event.save()
+
+    return event
+
+
+@transaction.atomic
+def create_delivery(
+    *,
+    retailer,
+    customer_name,
+    customer_phone,
+    delivery_address,
+    item_description,
+    expected_delivery_at,
+):
+    if retailer.role != retailer.Role.RETAILER:
+        raise PermissionDenied("Only Retailers can create deliveries.")
+
+    delivery = Delivery(
+        customer_name=customer_name,
+        customer_phone=customer_phone,
+        delivery_address=delivery_address,
+        item_description=item_description,
+        expected_delivery_at=expected_delivery_at,
+        created_by=retailer,
+        status=Delivery.Status.OPEN,
+    )
+
+    delivery.full_clean()
+    delivery.save()
+
+    delivery.reference = f"DEL-{delivery.pk:03d}"
+    delivery.full_clean()
+    delivery.save(update_fields=["reference"])
+
+    record_delivery_event(
+        delivery=delivery,
+        actor=retailer,
+        event_type=DeliveryEvent.EventType.CREATED,
+        from_status=None,
+        to_status=Delivery.Status.OPEN,
+    )
+
+    return delivery

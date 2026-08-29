@@ -5,6 +5,13 @@ from django.test import SimpleTestCase
 from .models import Delivery
 from .services import DeliveryHealth, calculate_delivery_health
 
+from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied
+from django.test import TestCase
+
+from .models import DeliveryEvent
+from .services import create_delivery
+
 
 class DeliveryHealthTests(SimpleTestCase):
     def setUp(self):
@@ -108,3 +115,78 @@ class DeliveryHealthTests(SimpleTestCase):
             health,
             DeliveryHealth.DELIVERED_LATE,
         )
+        
+        
+
+class CreateDeliveryTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+
+        self.retailer = User.objects.create_user(
+            email="retailer@reflex.test",
+            password="test-password",
+            name="Test Retailer",
+            role=User.Role.RETAILER,
+        )
+
+        self.dispatcher = User.objects.create_user(
+            email="dispatcher@reflex.test",
+            password="test-password",
+            name="Test Dispatcher",
+            role=User.Role.DISPATCHER,
+        )
+
+        self.expected_delivery_at = datetime(
+            2026,
+            8,
+            30,
+            14,
+            0,
+            tzinfo=dt_timezone.utc,
+        )
+
+    def test_retailer_can_create_delivery(self):
+        delivery = create_delivery(
+            retailer=self.retailer,
+            customer_name="Peter Mwangi",
+            customer_phone="0712345678",
+            delivery_address="Nyeri",
+            item_description="Printer",
+            expected_delivery_at=self.expected_delivery_at,
+        )
+
+        self.assertEqual(delivery.status, delivery.Status.OPEN)
+        self.assertEqual(delivery.created_by, self.retailer)
+        self.assertEqual(delivery.reference, "DEL-001")
+        self.assertIsNotNone(delivery.confirmation_token)
+
+    def test_creating_delivery_records_created_event(self):
+        delivery = create_delivery(
+            retailer=self.retailer,
+            customer_name="Peter Mwangi",
+            customer_phone="0712345678",
+            delivery_address="Nyeri",
+            item_description="Printer",
+            expected_delivery_at=self.expected_delivery_at,
+        )
+
+        event = delivery.events.get()
+
+        self.assertEqual(
+            event.event_type,
+            DeliveryEvent.EventType.CREATED,
+        )
+        self.assertEqual(event.actor, self.retailer)
+        self.assertIsNone(event.from_status)
+        self.assertEqual(event.to_status, delivery.Status.OPEN)
+
+    def test_non_retailer_cannot_create_delivery(self):
+        with self.assertRaises(PermissionDenied):
+            create_delivery(
+                retailer=self.dispatcher,
+                customer_name="Peter Mwangi",
+                customer_phone="0712345678",
+                delivery_address="Nyeri",
+                item_description="Printer",
+                expected_delivery_at=self.expected_delivery_at,
+            )
