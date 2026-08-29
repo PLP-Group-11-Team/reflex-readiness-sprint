@@ -6,7 +6,9 @@ from django.core.exceptions import PermissionDenied, ValidationError
 
 from django.db import transaction
 
-from .models import Delivery, DeliveryEvent
+import secrets
+
+from .models import Delivery, DeliveryConfirmation, DeliveryEvent
 
 
 AT_RISK_WINDOW = timedelta(minutes=30)
@@ -219,7 +221,94 @@ def update_delivery_status(*, rider, delivery_id, new_status):
 
     return delivery
 
+@transaction.atomic
+def confirm_delivery(*, rider, delivery_id, token):
+    if rider.role != rider.Role.RIDER:
+        raise PermissionDenied(
+            "Only Riders can confirm deliveries."
+        )
+
+    delivery = Delivery.objects.select_for_update().get(pk=delivery_id)
+
+    if delivery.assigned_rider_id != rider.id:
+        raise PermissionDenied(
+            "Only the assigned Rider can confirm this delivery."
+        )
+
+    existing_confirmation = DeliveryConfirmation.objects.filter(
+        delivery=delivery
+    ).first()
+
+    if existing_confirmation is not None:
+        return (
+            delivery,
+            existing_confirmation,
+            ConfirmationOutcome.ALREADY_CONFIRMED,
+        )
+
+    if delivery.status != Delivery.Status.IN_TRANSIT:
+        raise DeliveryConflict(
+            "Only IN_TRANSIT deliveries can be confirmed."
+        )
+
+    submitted_token = token.strip() if token else ""
+
+    if not submitted_token or not secrets.compare_digest(
+        submitted_token,
+        delivery.confirmation_token,
+    ):
+        raise InvalidConfirmationToken(
+            "The confirmation token is invalid."
+        )
+
+    confirmation = DeliveryConfirmation(
+        delivery=delivery,
+        confirmed_by=rider,
+        confirmation_method=DeliveryConfirmation.Method.QR,
+    )
+
+    confirmation.full_clean()
+    confirmation.save()
+
+    previous_status = delivery.status
+
+    delivery.status = Delivery.Status.DELIVERED
+    delivery.delivered_at = timezone.now()
+
+    delivery.full_clean()
+    delivery.save(
+        update_fields=[
+            "status",
+            "delivered_at",
+            "updated_at",
+        ]
+    )
+
+    record_delivery_event(
+        delivery=delivery,
+        actor=rider,
+        event_type=DeliveryEvent.EventType.CONFIRMED,
+        from_status=previous_status,
+        to_status=Delivery.Status.DELIVERED,
+    )
+
+    return (
+        delivery,
+        confirmation,
+        ConfirmationOutcome.CONFIRMED,
+    )
+
 class DeliveryConflict(Exception):
     """Raised when a delivery operation conflicts with its current state."""
 
     pass
+
+class InvalidConfirmationToken(Exception):
+    """Raised when the submitted confirmation token is invalid."""
+
+    pass
+
+
+class ConfirmationOutcome:
+    CONFIRMED = "CONFIRMED"
+    ALREADY_CONFIRMED = "ALREADY_CONFIRMED"

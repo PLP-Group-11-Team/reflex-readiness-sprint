@@ -2,17 +2,23 @@ from datetime import datetime, timezone as dt_timezone
 
 from django.test import SimpleTestCase, TestCase
 
-from .models import Delivery, DeliveryEvent
+from .models import Delivery, DeliveryConfirmation, DeliveryEvent
 
 from django.contrib.auth import get_user_model
 
+from unittest.mock import patch
+
 from django.core.exceptions import PermissionDenied, ValidationError
 
+
 from .services import (
+    ConfirmationOutcome,
     DeliveryConflict,
     DeliveryHealth,
+    InvalidConfirmationToken,
     assign_rider,
     calculate_delivery_health,
+    confirm_delivery,
     create_delivery,
     update_delivery_status,
 )
@@ -486,4 +492,226 @@ class UpdateDeliveryStatusTests(TestCase):
         self.assertEqual(
             self.delivery.status,
             Delivery.Status.ASSIGNED,
+        )
+        
+class ConfirmDeliveryTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+
+        self.retailer = User.objects.create_user(
+            email="retailer-confirm@reflex.test",
+            password="test-password",
+            name="Test Retailer",
+            role=User.Role.RETAILER,
+        )
+
+        self.dispatcher = User.objects.create_user(
+            email="dispatcher-confirm@reflex.test",
+            password="test-password",
+            name="Test Dispatcher",
+            role=User.Role.DISPATCHER,
+        )
+
+        self.rider = User.objects.create_user(
+            email="rider-confirm@reflex.test",
+            password="test-password",
+            name="Brian Rider",
+            role=User.Role.RIDER,
+        )
+
+        self.other_rider = User.objects.create_user(
+            email="other-rider-confirm@reflex.test",
+            password="test-password",
+            name="Amina Rider",
+            role=User.Role.RIDER,
+        )
+
+        self.expected_delivery_at = datetime(
+            2026,
+            8,
+            30,
+            14,
+            0,
+            tzinfo=dt_timezone.utc,
+        )
+
+        self.delivery = create_delivery(
+            retailer=self.retailer,
+            customer_name="Peter Mwangi",
+            customer_phone="0712345678",
+            delivery_address="Nyeri",
+            item_description="Printer",
+            expected_delivery_at=self.expected_delivery_at,
+        )
+
+        self.delivery = assign_rider(
+            dispatcher=self.dispatcher,
+            delivery_id=self.delivery.id,
+            rider=self.rider,
+        )
+
+    def move_to_in_transit(self):
+        update_delivery_status(
+            rider=self.rider,
+            delivery_id=self.delivery.id,
+            new_status=Delivery.Status.PICKED_UP,
+        )
+
+        return update_delivery_status(
+            rider=self.rider,
+            delivery_id=self.delivery.id,
+            new_status=Delivery.Status.IN_TRANSIT,
+        )
+
+    def test_assigned_rider_can_confirm_with_correct_token(self):
+        delivery = self.move_to_in_transit()
+
+        delivery, confirmation, outcome = confirm_delivery(
+            rider=self.rider,
+            delivery_id=delivery.id,
+            token=delivery.confirmation_token,
+        )
+
+        self.assertEqual(
+            outcome,
+            ConfirmationOutcome.CONFIRMED,
+        )
+        self.assertEqual(
+            delivery.status,
+            Delivery.Status.DELIVERED,
+        )
+        self.assertIsNotNone(delivery.delivered_at)
+        self.assertEqual(confirmation.confirmed_by, self.rider)
+
+    def test_wrong_token_is_rejected(self):
+        delivery = self.move_to_in_transit()
+
+        with self.assertRaises(InvalidConfirmationToken):
+            confirm_delivery(
+                rider=self.rider,
+                delivery_id=delivery.id,
+                token="WRONGTOKEN",
+            )
+
+        delivery.refresh_from_db()
+
+        self.assertEqual(
+            delivery.status,
+            Delivery.Status.IN_TRANSIT,
+        )
+
+        self.assertFalse(
+            DeliveryConfirmation.objects.filter(
+                delivery=delivery
+            ).exists()
+        )
+
+    def test_wrong_rider_cannot_confirm_delivery(self):
+        delivery = self.move_to_in_transit()
+
+        with self.assertRaises(PermissionDenied):
+            confirm_delivery(
+                rider=self.other_rider,
+                delivery_id=delivery.id,
+                token=delivery.confirmation_token,
+            )
+
+        delivery.refresh_from_db()
+
+        self.assertEqual(
+            delivery.status,
+            Delivery.Status.IN_TRANSIT,
+        )
+
+    def test_delivery_cannot_be_confirmed_before_in_transit(self):
+        with self.assertRaises(DeliveryConflict):
+            confirm_delivery(
+                rider=self.rider,
+                delivery_id=self.delivery.id,
+                token=self.delivery.confirmation_token,
+            )
+
+        self.delivery.refresh_from_db()
+
+        self.assertEqual(
+            self.delivery.status,
+            Delivery.Status.ASSIGNED,
+        )
+
+    def test_duplicate_confirmation_is_idempotent(self):
+        delivery = self.move_to_in_transit()
+
+        delivery, first_confirmation, first_outcome = confirm_delivery(
+            rider=self.rider,
+            delivery_id=delivery.id,
+            token=delivery.confirmation_token,
+        )
+
+        delivery, second_confirmation, second_outcome = confirm_delivery(
+            rider=self.rider,
+            delivery_id=delivery.id,
+            token=delivery.confirmation_token,
+        )
+
+        self.assertEqual(
+            first_outcome,
+            ConfirmationOutcome.CONFIRMED,
+        )
+
+        self.assertEqual(
+            second_outcome,
+            ConfirmationOutcome.ALREADY_CONFIRMED,
+        )
+
+        self.assertEqual(
+            first_confirmation.id,
+            second_confirmation.id,
+        )
+
+        self.assertEqual(
+            DeliveryConfirmation.objects.filter(
+                delivery=delivery
+            ).count(),
+            1,
+        )
+
+    def test_confirmation_records_event_and_final_health(self):
+        delivery = self.move_to_in_transit()
+
+        delivered_time = datetime(
+            2026,
+            8,
+            30,
+            13,
+            55,
+            tzinfo=dt_timezone.utc,
+        )
+
+        with patch(
+            "deliveries.services.timezone.now",
+            return_value=delivered_time,
+        ):
+            delivery, confirmation, outcome = confirm_delivery(
+                rider=self.rider,
+                delivery_id=delivery.id,
+                token=delivery.confirmation_token,
+            )
+
+        self.assertEqual(
+            calculate_delivery_health(delivery),
+            DeliveryHealth.DELIVERED_ON_TIME,
+        )
+
+        event = delivery.events.get(
+            event_type=DeliveryEvent.EventType.CONFIRMED
+        )
+
+        self.assertEqual(event.actor, self.rider)
+        self.assertEqual(
+            event.from_status,
+            Delivery.Status.IN_TRANSIT,
+        )
+        self.assertEqual(
+            event.to_status,
+            Delivery.Status.DELIVERED,
         )
