@@ -1,16 +1,21 @@
 from datetime import datetime, timezone as dt_timezone
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
-from .models import Delivery
-from .services import DeliveryHealth, calculate_delivery_health
+from .models import Delivery, DeliveryEvent
 
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied
-from django.test import TestCase
 
-from .models import DeliveryEvent
-from .services import create_delivery
+from django.core.exceptions import PermissionDenied, ValidationError
+
+from .services import (
+    DeliveryConflict,
+    DeliveryHealth,
+    assign_rider,
+    calculate_delivery_health,
+    create_delivery,
+)
+
 
 
 class DeliveryHealthTests(SimpleTestCase):
@@ -190,3 +195,147 @@ class CreateDeliveryTests(TestCase):
                 item_description="Printer",
                 expected_delivery_at=self.expected_delivery_at,
             )
+            
+            
+class AssignRiderTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+
+        self.retailer = User.objects.create_user(
+            email="retailer-assignment@reflex.test",
+            password="test-password",
+            name="Test Retailer",
+            role=User.Role.RETAILER,
+        )
+
+        self.dispatcher = User.objects.create_user(
+            email="dispatcher-assignment@reflex.test",
+            password="test-password",
+            name="Test Dispatcher",
+            role=User.Role.DISPATCHER,
+        )
+
+        self.rider = User.objects.create_user(
+            email="rider@reflex.test",
+            password="test-password",
+            name="Brian Rider",
+            role=User.Role.RIDER,
+        )
+
+        self.second_rider = User.objects.create_user(
+            email="rider-two@reflex.test",
+            password="test-password",
+            name="Amina Rider",
+            role=User.Role.RIDER,
+        )
+
+        self.expected_delivery_at = datetime(
+            2026,
+            8,
+            30,
+            14,
+            0,
+            tzinfo=dt_timezone.utc,
+        )
+
+        self.delivery = create_delivery(
+            retailer=self.retailer,
+            customer_name="Peter Mwangi",
+            customer_phone="0712345678",
+            delivery_address="Nyeri",
+            item_description="Printer",
+            expected_delivery_at=self.expected_delivery_at,
+        )
+
+    def test_dispatcher_can_assign_rider_to_open_delivery(self):
+        delivery = assign_rider(
+            dispatcher=self.dispatcher,
+            delivery_id=self.delivery.id,
+            rider=self.rider,
+        )
+
+        self.assertEqual(
+            delivery.status,
+            Delivery.Status.ASSIGNED,
+        )
+
+        self.assertEqual(
+            delivery.assigned_rider,
+            self.rider,
+        )
+
+        self.assertIsNotNone(delivery.assigned_at)
+
+        event = delivery.events.get(
+            event_type=DeliveryEvent.EventType.ASSIGNED
+        )
+
+        self.assertEqual(event.actor, self.dispatcher)
+        self.assertEqual(
+            event.from_status,
+            Delivery.Status.OPEN,
+        )
+        self.assertEqual(
+            event.to_status,
+            Delivery.Status.ASSIGNED,
+        )
+
+    def test_non_dispatcher_cannot_assign_rider(self):
+        with self.assertRaises(PermissionDenied):
+            assign_rider(
+                dispatcher=self.retailer,
+                delivery_id=self.delivery.id,
+                rider=self.rider,
+            )
+
+        self.delivery.refresh_from_db()
+
+        self.assertEqual(
+            self.delivery.status,
+            Delivery.Status.OPEN,
+        )
+
+        self.assertIsNone(self.delivery.assigned_rider)
+
+    def test_selected_user_must_be_rider(self):
+        with self.assertRaises(ValidationError):
+            assign_rider(
+                dispatcher=self.dispatcher,
+                delivery_id=self.delivery.id,
+                rider=self.retailer,
+            )
+
+        self.delivery.refresh_from_db()
+
+        self.assertEqual(
+            self.delivery.status,
+            Delivery.Status.OPEN,
+        )
+
+        self.assertIsNone(self.delivery.assigned_rider)
+
+    def test_delivery_cannot_be_assigned_twice(self):
+        assign_rider(
+            dispatcher=self.dispatcher,
+            delivery_id=self.delivery.id,
+            rider=self.rider,
+        )
+
+        with self.assertRaises(DeliveryConflict):
+            assign_rider(
+                dispatcher=self.dispatcher,
+                delivery_id=self.delivery.id,
+                rider=self.second_rider,
+            )
+
+        self.delivery.refresh_from_db()
+
+        self.assertEqual(
+            self.delivery.status,
+            Delivery.Status.ASSIGNED,
+        )
+
+        self.assertEqual(
+            self.delivery.assigned_rider,
+            self.rider,
+        )            

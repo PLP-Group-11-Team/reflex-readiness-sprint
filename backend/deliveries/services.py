@@ -2,10 +2,12 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
+
 from django.db import transaction
 
 from .models import Delivery, DeliveryEvent
+
 
 AT_RISK_WINDOW = timedelta(minutes=30)
 
@@ -108,3 +110,52 @@ def create_delivery(
     )
 
     return delivery
+
+@transaction.atomic
+def assign_rider(*, dispatcher, delivery_id, rider):
+    if dispatcher.role != dispatcher.Role.DISPATCHER:
+        raise PermissionDenied("Only Dispatchers can assign riders.")
+
+    if rider.role != rider.Role.RIDER:
+        raise ValidationError("The selected user is not a Rider.")
+
+    delivery = Delivery.objects.select_for_update().get(pk=delivery_id)
+
+    if delivery.status != Delivery.Status.OPEN:
+        raise DeliveryConflict(
+            "Only OPEN deliveries can be assigned."
+        )
+
+    if delivery.assigned_rider is not None:
+        raise DeliveryConflict(
+            "This delivery already has an assigned Rider."
+        )
+
+    delivery.assigned_rider = rider
+    delivery.status = Delivery.Status.ASSIGNED
+    delivery.assigned_at = timezone.now()
+
+    delivery.full_clean()
+    delivery.save(
+        update_fields=[
+            "assigned_rider",
+            "status",
+            "assigned_at",
+            "updated_at",
+        ]
+    )
+
+    record_delivery_event(
+        delivery=delivery,
+        actor=dispatcher,
+        event_type=DeliveryEvent.EventType.ASSIGNED,
+        from_status=Delivery.Status.OPEN,
+        to_status=Delivery.Status.ASSIGNED,
+    )
+
+    return delivery
+
+class DeliveryConflict(Exception):
+    """Raised when a delivery operation conflicts with its current state."""
+
+    pass
