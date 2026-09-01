@@ -383,6 +383,32 @@ const mapBackendDelivery = (
       d.confirmation_token || null,
   };
 };
+const loadDeliveries = useCallback(async () => {
+  try {
+    const list = await apiFetch<BackendDelivery[]>(
+      '/api/deliveries/'
+    );
+
+    const detailed = await Promise.all(
+      list.map(async (delivery) => {
+        try {
+          return await apiFetch<BackendDelivery>(
+            `/api/deliveries/${delivery.id}/`
+          );
+        } catch {
+          return delivery;
+        }
+      })
+    );
+
+    setDeliveries(
+      detailed.map(mapBackendDelivery)
+    );
+
+  } catch (error) {
+    console.error('Failed to load deliveries:', error);
+  }
+}, []);
 
 export const ReflexProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
@@ -407,6 +433,28 @@ export const ReflexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+  useEffect(() => {
+  const token = getAccessToken();
+
+  if (!token) {
+    return;
+  }
+
+  loadDeliveries();
+}, [loadDeliveries]);
+  useEffect(() => {
+  if (!currentUser) {
+    return;
+  }
+
+  const interval = window.setInterval(() => {
+    loadDeliveries();
+  }, 4000);
+
+  return () => {
+    window.clearInterval(interval);
+  };
+}, [currentUser, loadDeliveries]);
 
   // Login handler using Django backend
  const login = useCallback(
@@ -613,16 +661,58 @@ export const ReflexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [deliveries, riders]
   );
 
-  const createDelivery = useCallback(
-    (data: {
-      customer_name: string;
-      customer_phone: string;
-      customer_email?: string;
-      delivery_address: string;
-      item_description: string;
-      expected_delivery_at?: string;
-      reference?: string;
-    }) => {
+ const createDelivery = useCallback(
+  async (data: {
+    customer_name: string;
+    customer_phone: string;
+    customer_email?: string;
+    delivery_address: string;
+    item_description: string;
+    expected_delivery_at?: string;
+    reference?: string;
+  }) => {
+    try {
+      const delivery = await apiFetch<BackendDelivery>(
+        '/api/deliveries/',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            customer_name: data.customer_name.trim(),
+            customer_phone: data.customer_phone.trim(),
+            delivery_address: data.delivery_address.trim(),
+            item_description: data.item_description.trim(),
+            expected_delivery_at:
+              data.expected_delivery_at,
+          }),
+        }
+      );
+
+      const mapped = mapBackendDelivery(delivery);
+
+      await loadDeliveries();
+
+      setSelectedDeliveryId(mapped.delivery_id);
+
+      addToast(
+        `Delivery ${mapped.reference} created successfully`,
+        'success'
+      );
+
+      return mapped;
+
+    } catch (error) {
+      addToast(
+        error instanceof Error
+          ? error.message
+          : 'Failed to create delivery',
+        'warning'
+      );
+
+      return null;
+    }
+  },
+  [addToast, loadDeliveries]
+);
       const time = formatTimestamp();
       const expectedTime = data.expected_delivery_at?.trim() || addMinutesToTime(new Date(), 45);
       const existingIds = deliveries
