@@ -58,6 +58,7 @@ export interface Delivery {
   confirmation_time: string | null;
   history: StatusHistoryEntry[];
   transitHealth?: TransitHealthData;
+  confirmation_token?: string | null;
 }
 
 export type UserRole = 'retailer' | 'dispatcher' | 'rider';
