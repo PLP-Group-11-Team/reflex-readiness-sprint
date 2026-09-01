@@ -1,4 +1,10 @@
-import React, { createContext, useContext, useState, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useMemo, useCallback, useEffect } from 'react';
+import {
+  apiFetch,
+  saveTokens,
+  clearTokens,
+  getAccessToken,
+} from '../utils/api';
 import {
   Delivery,
   DeliveryStatus,
@@ -294,6 +300,89 @@ const getSeedDeliveries = (): Delivery[] => {
 };
 
 const ReflexContext = createContext<ReflexContextType | undefined>(undefined);
+ type BackendRider = {
+  id: number;
+  name: string;
+  role: string;
+};
+
+type BackendEvent = {
+  id: number;
+  event_type: string;
+  from_status: string | null;
+  to_status: string | null;
+  actor: {
+    id: number;
+    name: string;
+    role: string;
+  } | null;
+  created_at: string;
+};
+
+type BackendConfirmation = {
+  id: number;
+  confirmed_by: BackendRider;
+  confirmation_method: string;
+  confirmed_at: string;
+};
+
+type BackendDelivery = {
+  id: number;
+  reference: string;
+  customer_name: string;
+  customer_phone?: string;
+  delivery_address: string;
+  item_description: string;
+  status: DeliveryStatus;
+  health: DeliveryHealthType;
+  expected_delivery_at: string;
+  assigned_rider?: BackendRider | null;
+  confirmation_token?: string | null;
+  created_at?: string;
+  assigned_at?: string | null;
+  picked_up_at?: string | null;
+  in_transit_at?: string | null;
+  delivered_at?: string | null;
+  updated_at?: string;
+  confirmation?: BackendConfirmation | null;
+  events?: BackendEvent[];
+};
+const mapBackendDelivery = (
+  d: BackendDelivery
+): Delivery => {
+  const history: StatusHistoryEntry[] =
+    (d.events || [])
+      .filter((event) => event.to_status)
+      .map((event) => ({
+        status: event.to_status as DeliveryStatus,
+        timestamp: event.created_at,
+        note: event.event_type.replace(/_/g, ' '),
+        actor: event.actor?.name || 'System',
+      }));
+
+  return {
+    delivery_id: String(d.id),
+    reference: d.reference,
+    retailer: 'Mwangaza Electronics',
+    customer_name: d.customer_name,
+    customer_phone: d.customer_phone || '',
+    delivery_address: d.delivery_address,
+    item_description: d.item_description,
+    rider: d.assigned_rider?.name || null,
+    status: d.status,
+    created_at: d.created_at || '',
+    updated_at: d.updated_at || '',
+    expected_delivery_at: d.expected_delivery_at,
+    confirmation_time:
+      d.confirmation?.confirmed_at || null,
+    history,
+    transitHealth: {
+      health: d.health,
+    },
+    confirmation_token:
+      d.confirmation_token || null,
+  };
+};
 
 export const ReflexProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
@@ -320,19 +409,70 @@ export const ReflexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   // Login handler using Django backend
-  const login = useCallback(
-async (email: string, password?: string): Promise<{ success: boolean; error?: string }> => {
-try {
-const response = await fetch('http://127.0.0.1:8000/api/auth/login/', {
-method: 'POST',
-headers: {
-'Content-Type': 'application/json',
-},
-body: JSON.stringify({
-email: email.trim().toLowerCase(),
-password: password?.trim() || '',
-}),
-});
+ const login = useCallback(
+  async (
+    email: string,
+    password?: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const data = await apiFetch<{
+        access: string;
+        refresh: string;
+        user: {
+          id: number;
+          name: string;
+          role: string;
+        };
+      }>('/api/auth/login/', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          password: password?.trim() || '',
+        }),
+      });
+
+      saveTokens(data.access, data.refresh);
+
+      const backendUser: UserAccount = {
+        id: String(data.user.id),
+        name: data.user.name,
+        email: email.trim().toLowerCase(),
+        role: data.user.role.toLowerCase() as UserRole,
+        riderId:
+          data.user.role === 'RIDER'
+            ? String(data.user.id)
+            : undefined,
+      };
+
+      setCurrentUser(backendUser);
+      setRole(backendUser.role);
+
+      if (backendUser.role === 'rider') {
+        setActiveRiderId(backendUser.id);
+      }
+
+      setRetailerTab('dashboard');
+      setDispatcherTab('dashboard');
+
+      addToast(
+        `Welcome back, ${backendUser.name}!`,
+        'success'
+      );
+
+      return { success: true };
+
+    } catch (error) {
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Unable to connect to the Reflex server.',
+      };
+    }
+  },
+  [addToast]
+);
 
 
   const data = await response.json();
@@ -448,7 +588,11 @@ password: password?.trim() || '',
 
   // Logout handler
   const logout = useCallback(() => {
+     clearTokens();
     setCurrentUser(null);
+    setRole('retailer');
+    setActiveRiderId('');
+    setDeliveries([]);
     addToast('You have been logged out.', 'info');
   }, [addToast]);
 
