@@ -159,6 +159,6 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:3001',
     'http://127.0.0.1:3001',
-    "https://reflex-readiness-sprint-phuh.vercel.app",
+    "https://reflex-readiness-sprint-t45m.vercel.app",
 ]
 
