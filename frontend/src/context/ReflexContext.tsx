@@ -1,44 +1,89 @@
-import React, { createContext, useContext, useState, useMemo, useCallback, useEffect } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+
 import {
   apiFetch,
   saveTokens,
   clearTokens,
   getAccessToken,
 } from '../utils/api';
+
 import {
   Delivery,
-  DeliveryStatus,
-  StatusHistoryEntry,
   DeliveryHealthType,
-  TrafficCondition,
-  TransitHealthData,
+  DeliveryStatus,
+  NotificationToast,
   Rider,
   RiderStatusType,
-  UserRole,
+  StatusHistoryEntry,
+  TrafficCondition,
   UserAccount,
-  NotificationToast,
+  UserRole,
 } from '../types';
-import { addMinutesToTime } from '../utils/deliveryHealth';
 
 interface ReflexContextType {
   currentUser: UserAccount | null;
   users: UserAccount[];
-  login: (email: string, password?: string) => Promise<{ success: boolean; error?: string }>;
-  signup: (name: string, email: string, password: string, role: UserRole) => Promise<{ success: boolean; error?: string }>;
+
+  login: (
+    email: string,
+    password?: string
+  ) => Promise<{ success: boolean; error?: string }>;
+
+  signup: (
+    name: string,
+    email: string,
+    password: string,
+    role: UserRole
+  ) => Promise<{ success: boolean; error?: string }>;
+
   logout: () => void;
+
   role: UserRole;
   setRole: (role: UserRole) => void;
+
   activeRiderId: string;
   setActiveRiderId: (id: string) => void;
-  retailerTab: 'dashboard' | 'deliveries' | 'new_delivery';
-  setRetailerTab: (tab: 'dashboard' | 'deliveries' | 'new_delivery') => void;
-  dispatcherTab: 'dashboard' | 'monitoring';
-  setDispatcherTab: (tab: 'dashboard' | 'monitoring') => void;
+
+  retailerTab:
+    | 'dashboard'
+    | 'deliveries'
+    | 'new_delivery';
+
+  setRetailerTab: (
+    tab:
+      | 'dashboard'
+      | 'deliveries'
+      | 'new_delivery'
+  ) => void;
+
+  dispatcherTab:
+    | 'dashboard'
+    | 'monitoring';
+
+  setDispatcherTab: (
+    tab: 'dashboard' | 'monitoring'
+  ) => void;
+
   deliveries: Delivery[];
   riders: Rider[];
-  getRiderStatus: (riderName: string) => RiderStatusType;
+
+  getRiderStatus: (
+    riderName: string
+  ) => RiderStatusType;
+
   selectedDeliveryId: string | null;
-  setSelectedDeliveryId: (id: string | null) => void;
+
+  setSelectedDeliveryId: (
+    id: string | null
+  ) => void;
+
   createDelivery: (data: {
     customer_name: string;
     customer_phone: string;
@@ -47,260 +92,50 @@ interface ReflexContextType {
     item_description: string;
     expected_delivery_at?: string;
     reference?: string;
-  }) => Delivery;
-  assignRider: (deliveryId: string, riderName: string) => boolean;
-  confirmPickup: (deliveryId: string) => boolean;
-  startTransit: (deliveryId: string) => boolean;
-  confirmDeliveryQR: (deliveryId: string) => boolean;
+  }) => Promise<Delivery | null>;
+
+  assignRider: (
+    deliveryId: string,
+    riderName: string
+  ) => Promise<boolean>;
+
+  confirmPickup: (
+    deliveryId: string
+  ) => Promise<boolean>;
+
+  startTransit: (
+    deliveryId: string
+  ) => Promise<boolean>;
+
+  confirmDeliveryQR: (
+    deliveryId: string,
+    scannedToken?: string
+  ) => Promise<boolean>;
+
   updateTransitHealth: (
     deliveryId: string,
     health?: DeliveryHealthType,
     trafficCondition?: TrafficCondition,
     note?: string
   ) => boolean;
+
   resetDemoData: () => void;
+
   toasts: NotificationToast[];
-  addToast: (message: string, type?: 'success' | 'info' | 'warning') => void;
+
+  addToast: (
+    message: string,
+    type?: 'success' | 'info' | 'warning'
+  ) => void;
+
   removeToast: (id: string) => void;
 }
 
-const INITIAL_RIDERS: Rider[] = [
-  { id: 'brian', name: 'Brian Kamau', phone: '0733 112 233', vehicle: 'Box Bike (KMD 204C)' },
-  { id: 'james', name: 'James Otieno', phone: '0734 223 344', vehicle: 'Motorcycle (KME 882A)' },
-  { id: 'daniel', name: 'Daniel Mwangi', phone: '0735 334 455', vehicle: 'Motorcycle (KMH 509D)' },
-  { id: 'samuel', name: 'Samuel Mutua', phone: '0736 445 566', vehicle: 'Off Shift', isFixedOffline: true },
-];
+/* =========================
+   BACKEND TYPES
+========================= */
 
-const INITIAL_USERS: UserAccount[] = [
-  {
-    id: 'user-retailer-1',
-    name: 'Mwangaza Electronics',
-    email: 'retailer@mwangaza.ke',
-    password: 'password123',
-    role: 'retailer',
-  },
-  {
-    id: 'user-dispatcher-1',
-    name: 'Chief Dispatcher',
-    email: 'dispatch@reflex.ke',
-    password: 'password123',
-    role: 'dispatcher',
-  },
-  {
-    id: 'user-rider-1',
-    name: 'Brian Kamau',
-    email: 'brian@reflex.ke',
-    password: 'password123',
-    role: 'rider',
-    riderId: 'brian',
-  },
-  {
-    id: 'user-rider-2',
-    name: 'James Otieno',
-    email: 'james@reflex.ke',
-    password: 'password123',
-    role: 'rider',
-    riderId: 'james',
-  },
-];
-
-const formatTimestamp = (date: Date = new Date()): string => {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-};
-
-const getSeedDeliveries = (): Delivery[] => {
-  const now = new Date();
-  const relTime = (diffMinutes: number): string => {
-    const d = new Date(now.getTime() + diffMinutes * 60000);
-    return formatTimestamp(d);
-  };
-
-  return [
-    {
-      delivery_id: '104',
-      reference: 'DEL-001',
-      retailer: 'Mwangaza Electronics',
-      customer_name: 'Jane Wanjiku',
-      customer_phone: '0712 345 678',
-      customer_email: 'jane.wanjiku@gmail.com',
-      delivery_address: 'Westlands, Nairobi',
-      item_description: 'Samsung 55" TV',
-      rider: null,
-      status: 'OPEN',
-      created_at: relTime(-10),
-      updated_at: relTime(-10),
-      expected_delivery_at: relTime(50),
-      confirmation_time: null,
-      history: [
-        {
-          status: 'OPEN',
-          timestamp: relTime(-10),
-          note: 'Order created by Mwangaza Electronics',
-          actor: 'Retailer',
-        },
-      ],
-    },
-    {
-      delivery_id: '103',
-      reference: 'DEL-002',
-      retailer: 'Mwangaza Electronics',
-      customer_name: 'Amina Hassan',
-      customer_phone: '0723 554 433',
-      customer_email: 'amina.hassan@gmail.com',
-      delivery_address: 'Kilimani, Nairobi (Argwings Kodhek Rd)',
-      item_description: 'Dell 27" 4K Monitor',
-      rider: 'Brian Kamau',
-      status: 'IN_TRANSIT',
-      created_at: relTime(-30),
-      updated_at: relTime(-10),
-      expected_delivery_at: relTime(15),
-      confirmation_time: null,
-      history: [
-        {
-          status: 'OPEN',
-          timestamp: relTime(-30),
-          note: 'Order created by Mwangaza Electronics',
-          actor: 'Retailer',
-        },
-        {
-          status: 'ASSIGNED',
-          timestamp: relTime(-22),
-          note: 'Assigned to rider Brian Kamau',
-          actor: 'Dispatcher',
-        },
-        {
-          status: 'PICKED_UP',
-          timestamp: relTime(-15),
-          note: 'Package picked up by Brian Kamau from retailer store',
-          actor: 'Brian Kamau',
-        },
-        {
-          status: 'IN_TRANSIT',
-          timestamp: relTime(-10),
-          note: 'Brian Kamau is in transit to Kilimani (Argwings Kodhek Rd)',
-          actor: 'Brian Kamau',
-        },
-      ],
-    },
-    {
-      delivery_id: '105',
-      reference: 'DEL-003',
-      retailer: 'Mwangaza Electronics',
-      customer_name: 'Peter Mwangi',
-      customer_phone: '0722 456 789',
-      customer_email: 'peter.mwangi@outlook.com',
-      delivery_address: 'Kilimani, Nairobi',
-      item_description: 'HP Envy Laptop',
-      rider: null,
-      status: 'OPEN',
-      created_at: relTime(-50),
-      updated_at: relTime(-50),
-      expected_delivery_at: relTime(-10),
-      confirmation_time: null,
-      history: [
-        {
-          status: 'OPEN',
-          timestamp: relTime(-50),
-          note: 'Order created by Mwangaza Electronics',
-          actor: 'Retailer',
-        },
-      ],
-    },
-    {
-      delivery_id: '102',
-      reference: 'DEL-004',
-      retailer: 'Mwangaza Electronics',
-      customer_name: 'Samuel Kiprono',
-      customer_phone: '0711 998 877',
-      customer_email: 'samuel.kip@yahoo.com',
-      delivery_address: 'Riverside Drive, Nairobi',
-      item_description: 'Apple Watch Series 9',
-      rider: 'James Otieno',
-      status: 'DELIVERED',
-      created_at: relTime(-75),
-      updated_at: relTime(-35),
-      expected_delivery_at: relTime(-20),
-      confirmation_time: relTime(-35),
-      history: [
-        {
-          status: 'OPEN',
-          timestamp: relTime(-75),
-          note: 'Order created by Mwangaza Electronics',
-          actor: 'Retailer',
-        },
-        {
-          status: 'ASSIGNED',
-          timestamp: relTime(-65),
-          note: 'Assigned to rider James Otieno',
-          actor: 'Dispatcher',
-        },
-        {
-          status: 'PICKED_UP',
-          timestamp: relTime(-55),
-          note: 'Package picked up by James Otieno from retailer',
-          actor: 'James Otieno',
-        },
-        {
-          status: 'IN_TRANSIT',
-          timestamp: relTime(-45),
-          note: 'James Otieno in transit towards Riverside Drive',
-          actor: 'James Otieno',
-        },
-        {
-          status: 'DELIVERED',
-          timestamp: relTime(-35),
-          note: 'QR code scanned & delivery confirmed at customer destination on schedule',
-          actor: 'James Otieno & Customer',
-        },
-      ],
-    },
-    {
-      delivery_id: '101',
-      reference: 'DEL-005',
-      retailer: 'Mwangaza Electronics',
-      customer_name: 'Grace Muthoni',
-      customer_phone: '0700 123 456',
-      customer_email: 'grace.m@gmail.com',
-      delivery_address: 'Parklands, Nairobi',
-      item_description: 'Sony WH-1000XM5 Headphones',
-      rider: 'Daniel Mwangi',
-      status: 'DELIVERED',
-      created_at: relTime(-90),
-      updated_at: relTime(-15),
-      expected_delivery_at: relTime(-45),
-      confirmation_time: relTime(-15),
-      history: [
-        {
-          status: 'OPEN',
-          timestamp: relTime(-90),
-          note: 'Order created by Mwangaza Electronics',
-          actor: 'Retailer',
-        },
-        {
-          status: 'ASSIGNED',
-          timestamp: relTime(-75),
-          note: 'Assigned to rider Daniel Mwangi',
-          actor: 'Dispatcher',
-        },
-        {
-          status: 'PICKED_UP',
-          timestamp: relTime(-60),
-          note: 'Package picked up by Daniel Mwangi',
-          actor: 'Daniel Mwangi',
-        },
-        {
-          status: 'DELIVERED',
-          timestamp: relTime(-15),
-          note: 'Delivered past target deadline due to heavy transit delays',
-          actor: 'Daniel Mwangi & Customer',
-        },
-      ],
-    },
-  ];
-};
-
-const ReflexContext = createContext<ReflexContextType | undefined>(undefined);
- type BackendRider = {
+type BackendRider = {
   id: number;
   name: string;
   role: string;
@@ -309,769 +144,1660 @@ const ReflexContext = createContext<ReflexContextType | undefined>(undefined);
 type BackendEvent = {
   id: number;
   event_type: string;
-  from_status: string | null;
-  to_status: string | null;
+  from_status: DeliveryStatus | null;
+  to_status: DeliveryStatus | null;
+
   actor: {
     id: number;
     name: string;
     role: string;
   } | null;
+
   created_at: string;
 };
 
 type BackendConfirmation = {
   id: number;
+
   confirmed_by: BackendRider;
+
   confirmation_method: string;
+
   confirmed_at: string;
 };
 
 type BackendDelivery = {
   id: number;
+
   reference: string;
+
   customer_name: string;
+
   customer_phone?: string;
+
   delivery_address: string;
+
   item_description: string;
+
   status: DeliveryStatus;
+
   health: DeliveryHealthType;
+
   expected_delivery_at: string;
+
   assigned_rider?: BackendRider | null;
+
   confirmation_token?: string | null;
+
   created_at?: string;
+
   assigned_at?: string | null;
+
   picked_up_at?: string | null;
+
   in_transit_at?: string | null;
+
   delivered_at?: string | null;
+
   updated_at?: string;
+
   confirmation?: BackendConfirmation | null;
+
   events?: BackendEvent[];
 };
+
+/* =========================
+   DEMO FALLBACK RIDERS
+========================= */
+
+const INITIAL_RIDERS: Rider[] = [
+  {
+    id: 'brian',
+    name: 'Brian Kamau',
+    phone: '0733 112 233',
+    vehicle: 'Box Bike (KMD 204C)',
+  },
+  {
+    id: 'james',
+    name: 'James Otieno',
+    phone: '0734 223 344',
+    vehicle: 'Motorcycle (KME 882A)',
+  },
+  {
+    id: 'daniel',
+    name: 'Daniel Mwangi',
+    phone: '0735 334 455',
+    vehicle: 'Motorcycle (KMH 509D)',
+  },
+  {
+    id: 'samuel',
+    name: 'Samuel Mutua',
+    phone: '0736 445 566',
+    vehicle: 'Off Shift',
+    isFixedOffline: true,
+  },
+];
+
+/* =========================
+   DISPLAY USERS
+========================= */
+
+const INITIAL_USERS: UserAccount[] = [
+  {
+    id: 'demo-retailer',
+    name: 'Demo Retailer',
+    email: 'retailer@reflex.demo',
+    role: 'retailer',
+  },
+  {
+    id: 'demo-dispatcher',
+    name: 'Demo Dispatcher',
+    email: 'dispatcher@reflex.demo',
+    role: 'dispatcher',
+  },
+  {
+    id: 'demo-rider',
+    name: 'Demo Rider',
+    email: 'rider@reflex.demo',
+    role: 'rider',
+  },
+];
+
+/* =========================
+   HELPERS
+========================= */
+
+const normalizeRole = (
+  value: string
+): UserRole => {
+  const role = value
+    .trim()
+    .toLowerCase();
+
+  if (role === 'retailer') {
+    return 'retailer';
+  }
+
+  if (role === 'dispatcher') {
+    return 'dispatcher';
+  }
+
+  if (role === 'rider') {
+    return 'rider';
+  }
+
+  throw new Error(
+    `Unsupported backend role: ${value}`
+  );
+};
+
+const formatBackendError = (
+  error: unknown
+): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'The Reflex server returned an unexpected error.';
+};
+
+/*
+ * The frontend form currently produces values such as:
+ *
+ * 14:00:00
+ * 15:30:00
+ *
+ * Django expects a DateTimeField, so convert those
+ * values into an ISO datetime before POSTing.
+ */
+const toISODateTime = (
+  value?: string
+): string => {
+  if (!value) {
+    return new Date(
+      Date.now() + 45 * 60 * 1000
+    ).toISOString();
+  }
+
+  const trimmed = value.trim();
+
+  /*
+   * Already a full ISO datetime.
+   */
+  if (
+    trimmed.includes('T') ||
+    trimmed.endsWith('Z')
+  ) {
+    const parsed = new Date(trimmed);
+
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+
+  /*
+   * Handle HH:MM or HH:MM:SS.
+   */
+  const match = trimmed.match(
+    /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/
+  );
+
+  if (match) {
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    const seconds = Number(
+      match[3] ?? 0
+    );
+
+    const target = new Date();
+
+    target.setHours(
+      hours,
+      minutes,
+      seconds,
+      0
+    );
+
+    /*
+     * If today's selected time has already
+     * passed, treat it as tomorrow.
+     */
+    if (target.getTime() <= Date.now()) {
+      target.setDate(
+        target.getDate() + 1
+      );
+    }
+
+    return target.toISOString();
+  }
+
+  const parsed = new Date(trimmed);
+
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString();
+  }
+
+  throw new Error(
+    'Invalid expected delivery time.'
+  );
+};
+
+/* =========================
+   BACKEND → FRONTEND MAPPER
+========================= */
+
 const mapBackendDelivery = (
-  d: BackendDelivery
+  delivery: BackendDelivery,
+  retailerName: string
 ): Delivery => {
   const history: StatusHistoryEntry[] =
-    (d.events || [])
-      .filter((event) => event.to_status)
+    (delivery.events ?? [])
+      .filter(
+        (event) => event.to_status
+      )
       .map((event) => ({
-        status: event.to_status as DeliveryStatus,
-        timestamp: event.created_at,
-        note: event.event_type.replace(/_/g, ' '),
-        actor: event.actor?.name || 'System',
+        status:
+          event.to_status as DeliveryStatus,
+
+        timestamp:
+          event.created_at,
+
+        note:
+          event.event_type.replace(
+            /_/g,
+            ' '
+          ),
+
+        actor:
+          event.actor?.name ||
+          'System',
       }));
 
   return {
-    delivery_id: String(d.id),
-    reference: d.reference,
-    retailer: 'Mwangaza Electronics',
-    customer_name: d.customer_name,
-    customer_phone: d.customer_phone || '',
-    delivery_address: d.delivery_address,
-    item_description: d.item_description,
-    rider: d.assigned_rider?.name || null,
-    status: d.status,
-    created_at: d.created_at || '',
-    updated_at: d.updated_at || '',
-    expected_delivery_at: d.expected_delivery_at,
+    delivery_id: String(
+      delivery.id
+    ),
+
+    reference:
+      delivery.reference,
+
+    retailer:
+      retailerName,
+
+    customer_name:
+      delivery.customer_name,
+
+    customer_phone:
+      delivery.customer_phone ?? '',
+
+    delivery_address:
+      delivery.delivery_address,
+
+    item_description:
+      delivery.item_description,
+
+    rider:
+      delivery.assigned_rider?.name ??
+      null,
+
+    status:
+      delivery.status,
+
+    created_at:
+      delivery.created_at ?? '',
+
+    updated_at:
+      delivery.updated_at ?? '',
+
+    expected_delivery_at:
+      delivery.expected_delivery_at,
+
     confirmation_time:
-      d.confirmation?.confirmed_at || null,
+      delivery.confirmation
+        ?.confirmed_at ?? null,
+
     history,
+
     transitHealth: {
-      health: d.health,
+      health:
+        delivery.health,
+
+      reportedAt:
+        delivery.updated_at,
+
+      reportedBy:
+        delivery.assigned_rider
+          ?.name,
     },
+
     confirmation_token:
-      d.confirmation_token || null,
+      delivery.confirmation_token ??
+      null,
   };
 };
-const loadDeliveries = useCallback(async () => {
-  try {
-    const list = await apiFetch<BackendDelivery[]>(
-      '/api/deliveries/'
+
+/* =========================
+   CONTEXT
+========================= */
+
+const ReflexContext =
+  createContext<
+    ReflexContextType | undefined
+  >(undefined);
+
+/* =========================
+   PROVIDER
+========================= */
+
+export const ReflexProvider: React.FC<{
+  children: React.ReactNode;
+}> = ({ children }) => {
+  const [
+    currentUser,
+    setCurrentUser,
+  ] =
+    useState<UserAccount | null>(
+      null
     );
 
-    const detailed = await Promise.all(
-      list.map(async (delivery) => {
-        try {
-          return await apiFetch<BackendDelivery>(
-            `/api/deliveries/${delivery.id}/`
-          );
-        } catch {
-          return delivery;
-        }
-      })
+  const [users] =
+    useState<UserAccount[]>(
+      INITIAL_USERS
     );
 
-    setDeliveries(
-      detailed.map(mapBackendDelivery)
+  const [role, setRole] =
+    useState<UserRole>(
+      'retailer'
     );
 
-  } catch (error) {
-    console.error('Failed to load deliveries:', error);
-  }
-}, []);
+  const [
+    activeRiderId,
+    setActiveRiderId,
+  ] = useState<string>('');
 
-export const ReflexProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
-  const [users, setUsers] = useState<UserAccount[]>(INITIAL_USERS);
-  const [role, setRole] = useState<UserRole>('retailer');
-  const [activeRiderId, setActiveRiderId] = useState<string>('brian');
-  const [retailerTab, setRetailerTab] = useState<'dashboard' | 'deliveries' | 'new_delivery'>('dashboard');
-  const [dispatcherTab, setDispatcherTab] = useState<'dashboard' | 'monitoring'>('dashboard');
-  const [deliveries, setDeliveries] = useState<Delivery[]>(getSeedDeliveries());
-  const [riders, setRiders] = useState<Rider[]>(INITIAL_RIDERS);
-  const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>('104');
-  const [toasts, setToasts] = useState<NotificationToast[]>([]);
+  const [
+    retailerTab,
+    setRetailerTab,
+  ] =
+    useState<
+      | 'dashboard'
+      | 'deliveries'
+      | 'new_delivery'
+    >('dashboard');
 
-  const addToast = useCallback((message: string, type: 'success' | 'info' | 'warning' = 'success') => {
-    const id = Math.random().toString(36).substring(2, 9);
-    setToasts((prev) => [...prev, { id, message, type, timestamp: Date.now() }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4500);
-  }, []);
+  const [
+    dispatcherTab,
+    setDispatcherTab,
+  ] =
+    useState<
+      'dashboard'
+      | 'monitoring'
+    >('dashboard');
 
-  const removeToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-  useEffect(() => {
-  const token = getAccessToken();
+  const [
+    deliveries,
+    setDeliveries,
+  ] =
+    useState<Delivery[]>([]);
 
-  if (!token) {
-    return;
-  }
+  const [
+    riders,
+    setRiders,
+  ] =
+    useState<Rider[]>(
+      INITIAL_RIDERS
+    );
 
-  loadDeliveries();
-}, [loadDeliveries]);
-  useEffect(() => {
-  if (!currentUser) {
-    return;
-  }
+  const [
+    selectedDeliveryId,
+    setSelectedDeliveryId,
+  ] =
+    useState<string | null>(null);
 
-  const interval = window.setInterval(() => {
-    loadDeliveries();
-  }, 4000);
+  const [
+    toasts,
+    setToasts,
+  ] =
+    useState<
+      NotificationToast[]
+    >([]);
 
-  return () => {
-    window.clearInterval(interval);
-  };
-}, [currentUser, loadDeliveries]);
+  /* =========================
+     TOASTS
+  ========================= */
 
-  // Login handler using Django backend
- const login = useCallback(
-  async (
-    email: string,
-    password?: string
-  ): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const data = await apiFetch<{
-        access: string;
-        refresh: string;
-        user: {
-          id: number;
-          name: string;
-          role: string;
-        };
-      }>('/api/auth/login/', {
-        method: 'POST',
-        body: JSON.stringify({
-          email: email.trim().toLowerCase(),
-          password: password?.trim() || '',
-        }),
-      });
+  const addToast =
+    useCallback(
+      (
+        message: string,
+        type:
+          | 'success'
+          | 'info'
+          | 'warning' = 'success'
+      ) => {
+        const id =
+          Math.random()
+            .toString(36)
+            .substring(2, 9);
 
-      saveTokens(data.access, data.refresh);
-
-      const backendUser: UserAccount = {
-        id: String(data.user.id),
-        name: data.user.name,
-        email: email.trim().toLowerCase(),
-        role: data.user.role.toLowerCase() as UserRole,
-        riderId:
-          data.user.role === 'RIDER'
-            ? String(data.user.id)
-            : undefined,
-      };
-
-      setCurrentUser(backendUser);
-      setRole(backendUser.role);
-
-      if (backendUser.role === 'rider') {
-        setActiveRiderId(backendUser.id);
-      }
-
-      setRetailerTab('dashboard');
-      setDispatcherTab('dashboard');
-
-      addToast(
-        `Welcome back, ${backendUser.name}!`,
-        'success'
-      );
-
-      return { success: true };
-
-    } catch (error) {
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Unable to connect to the Reflex server.',
-      };
-    }
-  },
-  [addToast]
-);
-
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    return {
-      success: false,
-      error: data.message || 'Invalid email or password.',
-    };
-  }
-
-  const backendUser: UserAccount = {
-    id: String(data.user.id),
-    name: data.user.name,
-    email: email.trim().toLowerCase(),
-    role: data.user.role.toLowerCase() as UserRole,
-  };
-
-  setCurrentUser(backendUser);
-  setRole(backendUser.role);
-
-  setRetailerTab('dashboard');
-  setDispatcherTab('dashboard');
-
-  addToast(
-    `Welcome back, ${backendUser.name}! (${backendUser.role.toUpperCase()})`,
-    'success'
-  );
-
-  return { success: true };
-} catch (error) {
-  return {
-    success: false,
-    error: 'Unable to connect to the Reflex server.',
-  };
-}
-
-
-},
-[addToast]
-);
-
-  // Signup handler
-  const signup = useCallback(
-    async (name: string, email: string, password: string, newRole: UserRole): Promise<{ success: boolean; error?: string }> => {
-      await new Promise((resolve) => setTimeout(resolve, 350));
-
-      const cleanName = name.trim();
-      const cleanEmail = email.trim().toLowerCase();
-      const cleanPassword = password.trim();
-
-      if (!cleanName || !cleanEmail || !cleanPassword) {
-        return { success: false, error: 'All fields are required.' };
-      }
-
-      if (!cleanEmail.includes('@') || cleanEmail.indexOf('@') === 0 || cleanEmail.lastIndexOf('.') < cleanEmail.indexOf('@')) {
-        return { success: false, error: 'Please enter a valid email address.' };
-      }
-
-      if (cleanPassword.length < 4) {
-        return { success: false, error: 'Password must be at least 4 characters long.' };
-      }
-
-      const emailExists = users.some((u) => u.email.toLowerCase() === cleanEmail);
-      if (emailExists) {
-        return { success: false, error: 'An account with this email address already exists.' };
-      }
-
-      let riderId: string | undefined = undefined;
-
-      // If signing up as rider, ensure rider profile exists in fleet
-      if (newRole === 'rider') {
-        const idSlug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, '') || `rider${Date.now()}`;
-        riderId = idSlug;
-        
-        const existingRider = riders.find((r) => r.id === idSlug || r.name.toLowerCase() === cleanName.toLowerCase());
-        if (!existingRider) {
-          const newRiderProfile: Rider = {
-            id: idSlug,
-            name: cleanName,
-            phone: '0700 000 000',
-            vehicle: 'Motorcycle (Field Courier)',
-          };
-          setRiders((prev) => [...prev, newRiderProfile]);
-        }
-      }
-
-      const newUser: UserAccount = {
-        id: `user-${Date.now()}`,
-        name: cleanName,
-        email: cleanEmail,
-        password: cleanPassword,
-        role: newRole,
-        riderId,
-      };
-
-      setUsers((prev) => [...prev, newUser]);
-      setCurrentUser(newUser);
-      setRole(newRole);
-
-      if (riderId) {
-        setActiveRiderId(riderId);
-      }
-
-      setRetailerTab('dashboard');
-      setDispatcherTab('dashboard');
-
-      addToast(`Account created! Logged in as ${cleanName} (${newRole.toUpperCase()})`, 'success');
-      return { success: true };
-    },
-    [users, riders, addToast]
-  );
-
-  // Logout handler
-  const logout = useCallback(() => {
-     clearTokens();
-    setCurrentUser(null);
-    setRole('retailer');
-    setActiveRiderId('');
-    setDeliveries([]);
-    addToast('You have been logged out.', 'info');
-  }, [addToast]);
-
-  // Derived rider status
-  const getRiderStatus = useCallback(
-    (riderName: string): RiderStatusType => {
-      const riderObj = riders.find((r) => r.name.toLowerCase() === riderName.toLowerCase());
-      if (riderObj?.isFixedOffline) {
-        return 'Offline';
-      }
-      const hasActiveJob = deliveries.some(
-        (d) =>
-          d.rider?.toLowerCase() === riderName.toLowerCase() &&
-          (d.status === 'ASSIGNED' || d.status === 'PICKED_UP' || d.status === 'IN_TRANSIT')
-      );
-      return hasActiveJob ? 'On Delivery' : 'Available';
-    },
-    [deliveries, riders]
-  );
-
- const createDelivery = useCallback(
-  async (data: {
-    customer_name: string;
-    customer_phone: string;
-    customer_email?: string;
-    delivery_address: string;
-    item_description: string;
-    expected_delivery_at?: string;
-    reference?: string;
-  }) => {
-    try {
-      const delivery = await apiFetch<BackendDelivery>(
-        '/api/deliveries/',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            customer_name: data.customer_name.trim(),
-            customer_phone: data.customer_phone.trim(),
-            delivery_address: data.delivery_address.trim(),
-            item_description: data.item_description.trim(),
-            expected_delivery_at:
-              data.expected_delivery_at,
-          }),
-        }
-      );
-
-      const mapped = mapBackendDelivery(delivery);
-
-      await loadDeliveries();
-
-      setSelectedDeliveryId(mapped.delivery_id);
-
-      addToast(
-        `Delivery ${mapped.reference} created successfully`,
-        'success'
-      );
-
-      return mapped;
-
-    } catch (error) {
-      addToast(
-        error instanceof Error
-          ? error.message
-          : 'Failed to create delivery',
-        'warning'
-      );
-
-      return null;
-    }
-  },
-  [addToast, loadDeliveries]
-);
-      const time = formatTimestamp();
-      const expectedTime = data.expected_delivery_at?.trim() || addMinutesToTime(new Date(), 45);
-      const existingIds = deliveries
-        .map((d) => parseInt(d.delivery_id, 10))
-        .filter((n) => !isNaN(n));
-      const nextNum = existingIds.length > 0 ? Math.max(...existingIds) + 1 : 106;
-      const nextId = nextNum.toString();
-      const autoRef = `DEL-${String(nextNum).padStart(3, '0')}`;
-      const reference = data.reference?.trim() || autoRef;
-
-      const retailerName = currentUser?.role === 'retailer' ? currentUser.name : 'Mwangaza Electronics';
-
-      const newDelivery: Delivery = {
-        delivery_id: nextId,
-        reference,
-        retailer: retailerName,
-        customer_name: data.customer_name.trim(),
-        customer_phone: data.customer_phone.trim(),
-        customer_email: data.customer_email?.trim() || undefined,
-        delivery_address: data.delivery_address.trim(),
-        item_description: data.item_description.trim(),
-        rider: null,
-        status: 'OPEN',
-        created_at: time,
-        updated_at: time,
-        expected_delivery_at: expectedTime,
-        confirmation_time: null,
-        history: [
+        setToasts((previous) => [
+          ...previous,
           {
-            status: 'OPEN',
-            timestamp: time,
-            note: `Order created by ${retailerName} (Ref: ${reference}). Expected delivery at ${expectedTime}`,
-            actor: retailerName,
+            id,
+            message,
+            type,
+            timestamp:
+              Date.now(),
           },
-        ],
+        ]);
+
+        window.setTimeout(
+          () => {
+            setToasts(
+              (previous) =>
+                previous.filter(
+                  (toast) =>
+                    toast.id !==
+                    id
+                )
+            );
+          },
+          4500
+        );
+      },
+      []
+    );
+
+  const removeToast =
+    useCallback(
+      (id: string) => {
+        setToasts(
+          (previous) =>
+            previous.filter(
+              (toast) =>
+                toast.id !== id
+            )
+        );
+      },
+      []
+    );
+
+  /* =========================
+     LOAD RIDERS
+  ========================= */
+
+  const loadRiders =
+    useCallback(async () => {
+      try {
+        const backendRiders =
+          await apiFetch<
+            BackendRider[]
+          >('/api/riders/');
+
+        const mappedRiders =
+          backendRiders.map(
+            (rider) => ({
+              id: String(
+                rider.id
+              ),
+
+              name:
+                rider.name,
+
+              phone: '',
+
+              vehicle:
+                'Field Courier',
+            })
+          );
+
+        setRiders(
+          mappedRiders
+        );
+      } catch (error) {
+        console.error(
+          'Failed to load riders:',
+          error
+        );
+      }
+    }, []);
+
+  /* =========================
+     LOAD DELIVERIES
+  ========================= */
+
+  const loadDeliveries =
+    useCallback(
+      async (
+        retailerNameOverride?: string
+      ) => {
+        if (!getAccessToken()) {
+          return;
+        }
+
+        try {
+          const list =
+            await apiFetch<
+              BackendDelivery[]
+            >(
+              '/api/deliveries/'
+            );
+
+          /*
+           * The list endpoint intentionally
+           * does not contain events/token.
+           *
+           * Fetch detail for each delivery.
+           */
+          const detailed =
+            await Promise.all(
+              list.map(
+                async (
+                  delivery
+                ) => {
+                  try {
+                    return await apiFetch<BackendDelivery>(
+                      `/api/deliveries/${delivery.id}/`
+                    );
+                  } catch {
+                    return delivery;
+                  }
+                }
+              )
+            );
+
+          const retailerName =
+            retailerNameOverride ??
+            (currentUser?.role ===
+            'retailer'
+              ? currentUser.name
+              : 'Mwangaza Electronics');
+
+          const mapped =
+            detailed.map(
+              (delivery) =>
+                mapBackendDelivery(
+                  delivery,
+                  retailerName
+                )
+            );
+
+          setDeliveries(
+            mapped
+          );
+
+          setSelectedDeliveryId(
+            (previous) => {
+              if (
+                previous &&
+                mapped.some(
+                  (delivery) =>
+                    delivery.delivery_id ===
+                    previous
+                )
+              ) {
+                return previous;
+              }
+
+              return (
+                mapped[0]
+                  ?.delivery_id ??
+                null
+              );
+            }
+          );
+        } catch (error) {
+          console.error(
+            'Failed to load deliveries:',
+            error
+          );
+        }
+      },
+      [currentUser]
+    );
+
+  /* =========================
+     LOGIN
+  ========================= */
+
+  const login =
+    useCallback(
+      async (
+        email: string,
+        password?: string
+      ): Promise<{
+        success: boolean;
+        error?: string;
+      }> => {
+        try {
+          const cleanEmail =
+            email
+              .trim()
+              .toLowerCase();
+
+          const cleanPassword =
+            password?.trim() ??
+            '';
+
+          if (
+            !cleanEmail ||
+            !cleanPassword
+          ) {
+            return {
+              success: false,
+              error:
+                'Email and password are required.',
+            };
+          }
+
+          const data =
+            await apiFetch<{
+              access: string;
+              refresh: string;
+
+              user: {
+                id: number;
+                name: string;
+                role: string;
+              };
+            }>(
+              '/api/auth/login/',
+              {
+                method: 'POST',
+
+                body: JSON.stringify(
+                  {
+                    email:
+                      cleanEmail,
+
+                    password:
+                      cleanPassword,
+                  }
+                ),
+              }
+            );
+
+          saveTokens(
+            data.access,
+            data.refresh
+          );
+
+          const backendRole =
+            normalizeRole(
+              data.user.role
+            );
+
+          const backendUser:
+            UserAccount = {
+            id: String(
+              data.user.id
+            ),
+
+            name:
+              data.user.name,
+
+            email:
+              cleanEmail,
+
+            role:
+              backendRole,
+
+            riderId:
+              backendRole ===
+              'rider'
+                ? String(
+                    data.user.id
+                  )
+                : undefined,
+          };
+
+          setCurrentUser(
+            backendUser
+          );
+
+          setRole(
+            backendRole
+          );
+
+          /*
+           * Riders cannot call /api/riders/
+           * because that endpoint is dispatcher-only.
+           *
+           * Therefore insert the logged-in rider
+           * into the local display list using the
+           * backend ID.
+           */
+          if (
+            backendRole ===
+            'rider'
+          ) {
+            setActiveRiderId(
+              String(
+                data.user.id
+              )
+            );
+
+            setRiders(
+              (previous) => [
+                {
+                  id: String(
+                    data.user.id
+                  ),
+
+                  name:
+                    data.user.name,
+
+                  phone: '',
+
+                  vehicle:
+                    'Field Courier',
+                },
+
+                ...previous.filter(
+                  (rider) =>
+                    rider.name
+                      .toLowerCase() !==
+                    data.user.name
+                      .toLowerCase()
+                ),
+              ]
+            );
+          } else {
+            setActiveRiderId('');
+          }
+
+          setRetailerTab(
+            'dashboard'
+          );
+
+          setDispatcherTab(
+            'dashboard'
+          );
+
+          /*
+           * Only dispatcher can request the
+           * complete rider list.
+           */
+          if (
+            backendRole ===
+            'dispatcher'
+          ) {
+            await loadRiders();
+          }
+
+          await loadDeliveries(
+            backendRole ===
+            'retailer'
+              ? backendUser.name
+              : undefined
+          );
+
+          addToast(
+            `Welcome back, ${backendUser.name}!`,
+            'success'
+          );
+
+          return {
+            success: true,
+          };
+        } catch (error) {
+          return {
+            success: false,
+            error:
+              formatBackendError(
+                error
+              ),
+          };
+        }
+      },
+      [
+        addToast,
+        loadDeliveries,
+        loadRiders,
+      ]
+    );
+
+  /* =========================
+     SIGNUP
+  ========================= */
+
+  const signup =
+    useCallback(
+      async (
+        _name: string,
+        _email: string,
+        _password: string,
+        _newRole: UserRole
+      ): Promise<{
+        success: boolean;
+        error?: string;
+      }> => {
+        /*
+         * The current Django backend intentionally
+         * has no public registration endpoint.
+         *
+         * Demo users are seeded on Render.
+         */
+        return {
+          success: false,
+
+          error:
+            'Account registration is not enabled on the current backend. Please use a seeded demo account.',
+        };
+      },
+      []
+    );
+
+  /* =========================
+     LOGOUT
+  ========================= */
+
+  const logout =
+    useCallback(() => {
+      clearTokens();
+
+      setCurrentUser(
+        null
+      );
+
+      setRole(
+        'retailer'
+      );
+
+      setActiveRiderId('');
+
+      setDeliveries([]);
+
+      setSelectedDeliveryId(
+        null
+      );
+
+      setRetailerTab(
+        'dashboard'
+      );
+
+      setDispatcherTab(
+        'dashboard'
+      );
+
+      addToast(
+        'You have been logged out.',
+        'info'
+      );
+    }, [addToast]);
+
+  /* =========================
+     RESTORE SESSION
+  ========================= */
+
+  useEffect(() => {
+    const token =
+      getAccessToken();
+
+    if (!token) {
+      return;
+    }
+
+    const restoreSession =
+      async () => {
+        try {
+          const me =
+            await apiFetch<{
+              id: number;
+              name: string;
+              email: string;
+              role: string;
+            }>(
+              '/api/auth/me/'
+            );
+
+          const restoredRole =
+            normalizeRole(
+              me.role
+            );
+
+          const restoredUser:
+            UserAccount = {
+            id: String(
+              me.id
+            ),
+
+            name:
+              me.name,
+
+            email:
+              me.email,
+
+            role:
+              restoredRole,
+
+            riderId:
+              restoredRole ===
+              'rider'
+                ? String(
+                    me.id
+                  )
+                : undefined,
+          };
+
+          setCurrentUser(
+            restoredUser
+          );
+
+          setRole(
+            restoredRole
+          );
+
+          if (
+            restoredRole ===
+            'rider'
+          ) {
+            setActiveRiderId(
+              String(me.id)
+            );
+
+            setRiders(
+              (previous) => [
+                {
+                  id: String(
+                    me.id
+                  ),
+
+                  name:
+                    me.name,
+
+                  phone: '',
+
+                  vehicle:
+                    'Field Courier',
+                },
+
+                ...previous.filter(
+                  (rider) =>
+                    rider.name
+                      .toLowerCase() !==
+                    me.name
+                      .toLowerCase()
+                ),
+              ]
+            );
+          }
+
+          if (
+            restoredRole ===
+            'dispatcher'
+          ) {
+            await loadRiders();
+          }
+
+          await loadDeliveries(
+            restoredRole ===
+            'retailer'
+              ? restoredUser.name
+              : undefined
+          );
+        } catch (error) {
+          console.error(
+            'Session restore failed:',
+            error
+          );
+
+          clearTokens();
+
+          setCurrentUser(
+            null
+          );
+        }
       };
 
-      setDeliveries((prev) => [newDelivery, ...prev]);
-      setSelectedDeliveryId(nextId);
-      addToast(`Delivery #${nextId} (${reference}) created successfully`, 'success');
-      return newDelivery;
-    },
-    [deliveries, currentUser, addToast]
-  );
+    void restoreSession();
+  }, [
+    loadDeliveries,
+    loadRiders,
+  ]);
 
-  const assignRider = useCallback(
-    (deliveryId: string, riderName: string): boolean => {
-      const time = formatTimestamp();
-      let updated = false;
+  /* =========================
+     POLLING
+  ========================= */
 
-      setDeliveries((prev) =>
-        prev.map((d) => {
-          if ((d.delivery_id === deliveryId || d.reference === deliveryId) && d.status === 'OPEN') {
-            updated = true;
-            return {
-              ...d,
-              rider: riderName,
-              status: 'ASSIGNED' as DeliveryStatus,
-              updated_at: time,
-              history: [
-                ...d.history,
-                {
-                  status: 'ASSIGNED',
-                  timestamp: time,
-                  note: `Assigned to rider ${riderName}`,
-                  actor: 'Dispatcher',
-                },
-              ],
-            };
-          }
-          return d;
-        })
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    const interval =
+      window.setInterval(
+        () => {
+          void loadDeliveries();
+        },
+        4000
       );
 
-      if (updated) {
-        addToast('Rider assigned successfully', 'success');
-      }
-      return updated;
-    },
-    [addToast]
-  );
-
-  const confirmPickup = useCallback(
-    (deliveryId: string): boolean => {
-      const time = formatTimestamp();
-      let updated = false;
-
-      setDeliveries((prev) =>
-        prev.map((d) => {
-          if ((d.delivery_id === deliveryId || d.reference === deliveryId) && d.status === 'ASSIGNED') {
-            updated = true;
-            return {
-              ...d,
-              status: 'PICKED_UP' as DeliveryStatus,
-              updated_at: time,
-              transitHealth: {
-                health: 'ON_TRACK',
-                trafficCondition: 'smooth',
-                targetSlaMinutes: 35,
-                elapsedMinutes: 1,
-                reportedBy: d.rider || 'Rider',
-                reportedAt: time,
-                customNote: `Package picked up by ${d.rider || 'Rider'} from retailer shop.`,
-              },
-              history: [
-                ...d.history,
-                {
-                  status: 'PICKED_UP',
-                  timestamp: time,
-                  note: `Package picked up from ${d.retailer} by ${d.rider || 'Rider'}`,
-                  actor: d.rider || 'Rider',
-                },
-              ],
-            };
-          }
-          return d;
-        })
+    return () =>
+      window.clearInterval(
+        interval
       );
+  }, [
+    currentUser,
+    loadDeliveries,
+  ]);
 
-      if (updated) {
-        addToast('Pickup confirmed - Package ready for transit', 'success');
-      }
-      return updated;
-    },
-    [addToast]
-  );
+  /* =========================
+     RIDER STATUS
+  ========================= */
 
-  const startTransit = useCallback(
-    (deliveryId: string): boolean => {
-      const time = formatTimestamp();
-      let updated = false;
+  const getRiderStatus =
+    useCallback(
+      (
+        riderName: string
+      ): RiderStatusType => {
+        const rider =
+          riders.find(
+            (item) =>
+              item.name
+                .toLowerCase() ===
+              riderName
+                .toLowerCase()
+          );
 
-      setDeliveries((prev) =>
-        prev.map((d) => {
-          if ((d.delivery_id === deliveryId || d.reference === deliveryId) && d.status === 'PICKED_UP') {
-            updated = true;
-            return {
-              ...d,
-              status: 'IN_TRANSIT' as DeliveryStatus,
-              updated_at: time,
-              transitHealth: {
-                ...d.transitHealth,
-                health: d.transitHealth?.health || 'ON_TRACK',
-                trafficCondition: d.transitHealth?.trafficCondition || 'smooth',
-                reportedBy: d.rider || 'Rider',
-                reportedAt: time,
-                customNote: `${d.rider || 'Rider'} is in transit towards ${d.delivery_address}.`,
-              },
-              history: [
-                ...d.history,
-                {
-                  status: 'IN_TRANSIT',
-                  timestamp: time,
-                  note: `${d.rider || 'Rider'} is now in transit towards destination`,
-                  actor: d.rider || 'Rider',
-                },
-              ],
-            };
+        if (
+          rider?.isFixedOffline
+        ) {
+          return 'Offline';
+        }
+
+        const hasActiveJob =
+          deliveries.some(
+            (delivery) =>
+              delivery.rider
+                ?.toLowerCase() ===
+                riderName
+                  .toLowerCase() &&
+              [
+                'ASSIGNED',
+                'PICKED_UP',
+                'IN_TRANSIT',
+              ].includes(
+                delivery.status
+              )
+          );
+
+        return hasActiveJob
+          ? 'On Delivery'
+          : 'Available';
+      },
+      [
+        deliveries,
+        riders,
+      ]
+    );
+
+  /* =========================
+     DELIVERY LOOKUP
+  ========================= */
+
+  const resolveDeliveryId =
+    useCallback(
+      (
+        deliveryId: string
+      ): string => {
+        const delivery =
+          deliveries.find(
+            (item) =>
+              item.delivery_id ===
+                deliveryId ||
+              item.reference ===
+                deliveryId
+          );
+
+        return (
+          delivery?.delivery_id ??
+          deliveryId
+        );
+      },
+      [deliveries]
+    );
+
+  /* =========================
+     CREATE DELIVERY
+  ========================= */
+
+  const createDelivery =
+    useCallback(
+      async (data: {
+        customer_name: string;
+        customer_phone: string;
+        customer_email?: string;
+        delivery_address: string;
+        item_description: string;
+        expected_delivery_at?: string;
+        reference?: string;
+      }): Promise<
+        Delivery | null
+      > => {
+        try {
+          /*
+           * IMPORTANT:
+           * The backend generates the reference.
+           * The backend serializer does not accept
+           * the frontend "reference" field.
+           */
+          const delivery =
+            await apiFetch<BackendDelivery>(
+              '/api/deliveries/',
+              {
+                method: 'POST',
+
+                body: JSON.stringify(
+                  {
+                    customer_name:
+                      data.customer_name.trim(),
+
+                    customer_phone:
+                      data.customer_phone.trim(),
+
+                    delivery_address:
+                      data.delivery_address.trim(),
+
+                    item_description:
+                      data.item_description.trim(),
+
+                    expected_delivery_at:
+                      toISODateTime(
+                        data.expected_delivery_at
+                      ),
+                  }
+                ),
+              }
+            );
+
+          const mapped =
+            mapBackendDelivery(
+              delivery,
+
+              currentUser?.name ??
+                'Mwangaza Electronics'
+            );
+
+          setSelectedDeliveryId(
+            mapped.delivery_id
+          );
+
+          await loadDeliveries();
+
+          addToast(
+            `Delivery ${mapped.reference} created successfully.`,
+            'success'
+          );
+
+          return mapped;
+        } catch (error) {
+          addToast(
+            formatBackendError(
+              error
+            ),
+            'warning'
+          );
+
+          return null;
+        }
+      },
+      [
+        addToast,
+        currentUser,
+        loadDeliveries,
+      ]
+    );
+
+  /* =========================
+     FIND RIDER
+  ========================= */
+
+  const findRiderByName =
+    useCallback(
+      (
+        riderName: string
+      ) => {
+        return riders.find(
+          (rider) =>
+            rider.name
+              .toLowerCase() ===
+            riderName
+              .toLowerCase()
+        );
+      },
+      [riders]
+    );
+
+  /* =========================
+     ASSIGN RIDER
+  ========================= */
+
+  const assignRider =
+    useCallback(
+      async (
+        deliveryId: string,
+        riderName: string
+      ): Promise<boolean> => {
+        try {
+          const rider =
+            findRiderByName(
+              riderName
+            );
+
+          if (!rider) {
+            addToast(
+              'Rider not found.',
+              'warning'
+            );
+
+            return false;
           }
-          return d;
-        })
-      );
 
-      if (updated) {
-        addToast('Status updated: Delivery is now IN TRANSIT', 'info');
-      }
-      return updated;
-    },
-    [addToast]
-  );
+          const riderId =
+            Number(rider.id);
 
-  const confirmDeliveryQR = useCallback(
-    (deliveryId: string): boolean => {
-      const time = formatTimestamp();
-      let updated = false;
-
-      setDeliveries((prev) =>
-        prev.map((d) => {
           if (
-            (d.delivery_id === deliveryId || d.reference === deliveryId) &&
-            (d.status === 'PICKED_UP' || d.status === 'IN_TRANSIT')
+            !Number.isInteger(
+              riderId
+            )
           ) {
-            updated = true;
-            const historyToAdd: StatusHistoryEntry[] = [];
-            if (d.status === 'PICKED_UP' && !d.history.some((h) => h.status === 'IN_TRANSIT')) {
-              historyToAdd.push({
-                status: 'IN_TRANSIT',
-                timestamp: time,
-                note: `Package transit completed by ${d.rider || 'Rider'}`,
-                actor: d.rider || 'Rider',
-              });
-            }
-            historyToAdd.push({
-              status: 'DELIVERED',
-              timestamp: time,
-              note: 'QR code scanned & delivery confirmed at customer destination',
-              actor: `${d.rider || 'Rider'} & Customer`,
-            });
+            addToast(
+              'This rider does not have a valid backend ID. Refresh the dispatcher dashboard.',
+              'warning'
+            );
 
-            return {
-              ...d,
-              status: 'DELIVERED' as DeliveryStatus,
-              updated_at: time,
-              confirmation_time: time,
-              transitHealth: {
-                health: 'ON_TRACK',
-                trafficCondition: 'smooth',
-                targetSlaMinutes: 35,
-                elapsedMinutes: d.transitHealth?.elapsedMinutes || 24,
-                customNote: 'Delivered successfully at customer destination via QR scan.',
-              },
-              history: [...d.history, ...historyToAdd],
-            };
+            return false;
           }
-          return d;
-        })
-      );
 
-      if (updated) {
-        addToast('Delivery confirmed successfully', 'success');
-      }
-      return updated;
-    },
-    [addToast]
-  );
+          await apiFetch<BackendDelivery>(
+            `/api/deliveries/${resolveDeliveryId(
+              deliveryId
+            )}/assign/`,
+            {
+              method: 'PATCH',
 
-  const updateTransitHealth = useCallback(
-    (
-      deliveryId: string,
-      health: DeliveryHealthType,
-      trafficCondition: TrafficCondition = 'smooth',
-      note?: string
-    ): boolean => {
-      const time = formatTimestamp();
-      let updated = false;
-
-      setDeliveries((prev) =>
-        prev.map((d) => {
-          if (d.delivery_id === deliveryId || d.reference === deliveryId) {
-            updated = true;
-            const currentElapsed = d.transitHealth?.elapsedMinutes ?? (d.status === 'PICKED_UP' ? 14 : 5);
-            return {
-              ...d,
-              updated_at: time,
-              transitHealth: {
-                ...d.transitHealth,
-                health,
-                trafficCondition,
-                targetSlaMinutes: d.transitHealth?.targetSlaMinutes || 35,
-                elapsedMinutes: currentElapsed,
-                reportedBy: currentUser?.name || 'Dispatcher',
-                reportedAt: time,
-                customNote:
-                  note ||
-                  (trafficCondition === 'heavy'
-                    ? 'Heavy traffic gridlock reported (+15m delay)'
-                    : trafficCondition === 'moderate'
-                    ? 'Moderate traffic congestion en route'
-                    : 'Transit flowing smoothly on schedule'),
-              },
-              history: [
-                ...d.history,
+              body: JSON.stringify(
                 {
-                  status: d.status,
-                  timestamp: time,
-                  note: `Transit Health updated: ${health.replace('_', ' ')} (${trafficCondition} traffic)${note ? ` - ${note}` : ''}`,
-                  actor: currentUser?.name || 'Dispatcher',
-                },
-              ],
-            };
+                  rider_id:
+                    riderId,
+                }
+              ),
+            }
+          );
+
+          await loadDeliveries();
+
+          addToast(
+            `Rider ${rider.name} assigned successfully.`,
+            'success'
+          );
+
+          return true;
+        } catch (error) {
+          addToast(
+            formatBackendError(
+              error
+            ),
+            'warning'
+          );
+
+          return false;
+        }
+      },
+      [
+        addToast,
+        findRiderByName,
+        loadDeliveries,
+        resolveDeliveryId,
+      ]
+    );
+
+  /* =========================
+     UPDATE RIDER STATUS
+  ========================= */
+
+  const updateStatus =
+    useCallback(
+      async (
+        deliveryId: string,
+        newStatus:
+          | 'PICKED_UP'
+          | 'IN_TRANSIT'
+      ): Promise<boolean> => {
+        try {
+          await apiFetch<BackendDelivery>(
+            `/api/deliveries/${resolveDeliveryId(
+              deliveryId
+            )}/status/`,
+            {
+              method: 'PATCH',
+
+              body: JSON.stringify(
+                {
+                  status:
+                    newStatus,
+                }
+              ),
+            }
+          );
+
+          await loadDeliveries();
+
+          if (
+            newStatus ===
+            'PICKED_UP'
+          ) {
+            addToast(
+              'Pickup confirmed. Package is ready for transit.',
+              'success'
+            );
+          } else {
+            addToast(
+              'Delivery is now IN TRANSIT.',
+              'success'
+            );
           }
-          return d;
-        })
+
+          return true;
+        } catch (error) {
+          addToast(
+            formatBackendError(
+              error
+            ),
+            'warning'
+          );
+
+          return false;
+        }
+      },
+      [
+        addToast,
+        loadDeliveries,
+        resolveDeliveryId,
+      ]
+    );
+
+  const confirmPickup =
+    useCallback(
+      async (
+        deliveryId: string
+      ): Promise<boolean> => {
+        return updateStatus(
+          deliveryId,
+          'PICKED_UP'
+        );
+      },
+      [updateStatus]
+    );
+
+  const startTransit =
+    useCallback(
+      async (
+        deliveryId: string
+      ): Promise<boolean> => {
+        return updateStatus(
+          deliveryId,
+          'IN_TRANSIT'
+        );
+      },
+      [updateStatus]
+    );
+
+  /* =========================
+     QR CONFIRMATION
+  ========================= */
+
+  const confirmDeliveryQR =
+    useCallback(
+      async (
+        deliveryId: string,
+        scannedToken?: string
+      ): Promise<boolean> => {
+        try {
+          const delivery =
+            deliveries.find(
+              (item) =>
+                item.delivery_id ===
+                  deliveryId ||
+                item.reference ===
+                  deliveryId
+            );
+
+          if (!delivery) {
+            addToast(
+              'Delivery not found.',
+              'warning'
+            );
+
+            return false;
+          }
+
+          /*
+           * A rider must provide the token
+           * obtained from the customer's QR.
+           *
+           * Never expose the retailer's
+           * confirmation token to the rider
+           * before scanning.
+           */
+          const token =
+            scannedToken?.trim() ||
+            delivery.confirmation_token?.trim();
+
+          if (!token) {
+            addToast(
+              'No QR token was provided. The rider must scan the customer QR code.',
+              'warning'
+            );
+
+            return false;
+          }
+
+          await apiFetch(
+            `/api/deliveries/${delivery.delivery_id}/confirm/`,
+            {
+              method: 'POST',
+
+              body: JSON.stringify(
+                {
+                  token,
+                }
+              ),
+            }
+          );
+
+          await loadDeliveries();
+
+          addToast(
+            'Delivery confirmed successfully.',
+            'success'
+          );
+
+          return true;
+        } catch (error) {
+          addToast(
+            formatBackendError(
+              error
+            ),
+            'warning'
+          );
+
+          return false;
+        }
+      },
+      [
+        addToast,
+        deliveries,
+        loadDeliveries,
+      ]
+    );
+
+  /* =========================
+     DELIVERY HEALTH
+  ========================= */
+
+  const updateTransitHealth =
+    useCallback(
+      (
+        _deliveryId: string,
+        _health?: DeliveryHealthType,
+        _trafficCondition?: TrafficCondition,
+        _note?: string
+      ): boolean => {
+        /*
+         * IMPORTANT:
+         * The backend calculates health automatically.
+         *
+         * There is intentionally no PATCH endpoint
+         * for manually changing health.
+         */
+        addToast(
+          'Delivery health is calculated automatically by the backend.',
+          'info'
+        );
+
+        void loadDeliveries();
+
+        return false;
+      },
+      [
+        addToast,
+        loadDeliveries,
+      ]
+    );
+
+  /* =========================
+     RESET
+  ========================= */
+
+  const resetDemoData =
+    useCallback(() => {
+      void loadDeliveries();
+
+      addToast(
+        'Demo state refreshed from the backend.',
+        'info'
       );
-
-      if (updated) {
-        addToast(`Transit health for #${deliveryId} updated: ${health.replace('_', ' ')}`, 'info');
-      }
-      return updated;
-    },
-    [currentUser, addToast]
-  );
-
-  const resetDemoData = useCallback(() => {
-    setDeliveries(getSeedDeliveries());
-    setSelectedDeliveryId('103');
-    setRole('retailer');
-    setRetailerTab('dashboard');
-    setDispatcherTab('dashboard');
-    setActiveRiderId('brian');
-    addToast('Demo state reset to initial seed data (#103 In Transit)', 'info');
-  }, [addToast]);
-
-  const value = useMemo(
-    () => ({
-      currentUser,
-      users,
-      login,
-      signup,
-      logout,
-      role,
-      setRole,
-      activeRiderId,
-      setActiveRiderId,
-      retailerTab,
-      setRetailerTab,
-      dispatcherTab,
-      setDispatcherTab,
-      deliveries,
-      riders,
-      getRiderStatus,
-      selectedDeliveryId,
-      setSelectedDeliveryId,
-      createDelivery,
-      assignRider,
-      confirmPickup,
-      startTransit,
-      confirmDeliveryQR,
-      updateTransitHealth,
-      resetDemoData,
-      toasts,
+    }, [
       addToast,
-      removeToast,
-    }),
-    [
-      currentUser,
-      users,
-      login,
-      signup,
-      logout,
-      role,
-      activeRiderId,
-      retailerTab,
-      dispatcherTab,
-      deliveries,
-      riders,
-      getRiderStatus,
-      selectedDeliveryId,
-      createDelivery,
-      assignRider,
-      confirmPickup,
-      startTransit,
-      confirmDeliveryQR,
-      updateTransitHealth,
-      resetDemoData,
-      toasts,
-      addToast,
-      removeToast,
-    ]
-  );
+      loadDeliveries,
+    ]);
 
-  return <ReflexContext.Provider value={value}>{children}</ReflexContext.Provider>;
+  /* =========================
+     CONTEXT VALUE
+  ========================= */
+
+  const value =
+    useMemo<ReflexContextType>(
+      () => ({
+        currentUser,
+
+        users,
+
+        login,
+
+        signup,
+
+        logout,
+
+        role,
+
+        setRole,
+
+        activeRiderId,
+
+        setActiveRiderId,
+
+        retailerTab,
+
+        setRetailerTab,
+
+        dispatcherTab,
+
+        setDispatcherTab,
+
+        deliveries,
+
+        riders,
+
+        getRiderStatus,
+
+        selectedDeliveryId,
+
+        setSelectedDeliveryId,
+
+        createDelivery,
+
+        assignRider,
+
+        confirmPickup,
+
+        startTransit,
+
+        confirmDeliveryQR,
+
+        updateTransitHealth,
+
+        resetDemoData,
+
+        toasts,
+
+        addToast,
+
+        removeToast,
+      }),
+      [
+        currentUser,
+        users,
+        login,
+        signup,
+        logout,
+        role,
+        activeRiderId,
+        retailerTab,
+        dispatcherTab,
+        deliveries,
+        riders,
+        getRiderStatus,
+        selectedDeliveryId,
+        createDelivery,
+        assignRider,
+        confirmPickup,
+        startTransit,
+        confirmDeliveryQR,
+        updateTransitHealth,
+        resetDemoData,
+        toasts,
+        addToast,
+        removeToast,
+      ]
+    );
+
+  return (
+    <ReflexContext.Provider
+      value={value}
+    >
+      {children}
+    </ReflexContext.Provider>
+  );
 };
+
+/* =========================
+   HOOK
+========================= */
 
 export const useReflex = () => {
-  const context = useContext(ReflexContext);
+  const context =
+    useContext(
+      ReflexContext
+    );
+
   if (!context) {
-    throw new Error('useReflex must be used within a ReflexProvider');
+    throw new Error(
+      'useReflex must be used within a ReflexProvider'
+    );
   }
+
   return context;
 };
-
