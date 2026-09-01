@@ -316,7 +316,7 @@ The current local prototype database contains the following demonstration users:
 The current demo password is:
 
 ```text
-password123
+ReflexDemo123!
 ```
 
 These are local prototype accounts. The SQLite database is intentionally excluded from Git, so demo users may need to be recreated when setting up a fresh environment.
