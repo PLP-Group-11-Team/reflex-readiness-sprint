@@ -156,6 +156,7 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
 }
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -164,7 +165,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://reflex-readiness-sprint-t45m.vercel.app",
 ]
 
+CORS_ALLOW_CREDENTIALS = True
+
 CSRF_TRUSTED_ORIGINS = [
     "https://reflex-readiness-sprint-t45m.vercel.app",
 ]
-
