@@ -3,52 +3,31 @@ const API_BASE_URL = (
   'https://reflex-readiness-sprint-p76o.onrender.com'
 ).replace(/\/+$/, '');
 
-const ACCESS_TOKEN_KEY =
-  'reflex_access_token';
-
-const REFRESH_TOKEN_KEY =
-  'reflex_refresh_token';
+const ACCESS_TOKEN_KEY = 'reflex_access_token';
+const REFRESH_TOKEN_KEY = 'reflex_refresh_token';
 
 export const getAccessToken = (): string | null => {
-  return localStorage.getItem(
-    ACCESS_TOKEN_KEY
-  );
+  return localStorage.getItem(ACCESS_TOKEN_KEY);
 };
 
 const getRefreshToken = (): string | null => {
-  return localStorage.getItem(
-    REFRESH_TOKEN_KEY
-  );
+  return localStorage.getItem(REFRESH_TOKEN_KEY);
 };
 
 export const saveTokens = (
   access: string,
   refresh: string
 ): void => {
-  localStorage.setItem(
-    ACCESS_TOKEN_KEY,
-    access
-  );
-
-  localStorage.setItem(
-    REFRESH_TOKEN_KEY,
-    refresh
-  );
+  localStorage.setItem(ACCESS_TOKEN_KEY, access);
+  localStorage.setItem(REFRESH_TOKEN_KEY, refresh);
 };
 
 export const clearTokens = (): void => {
-  localStorage.removeItem(
-    ACCESS_TOKEN_KEY
-  );
-
-  localStorage.removeItem(
-    REFRESH_TOKEN_KEY
-  );
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
 };
 
-const buildUrl = (
-  path: string
-): string => {
+const buildUrl = (path: string): string => {
   if (
     path.startsWith('http://') ||
     path.startsWith('https://')
@@ -57,85 +36,79 @@ const buildUrl = (
   }
 
   return `${API_BASE_URL}${
-    path.startsWith('/')
-      ? path
-      : `/${path}`
+    path.startsWith('/') ? path : `/${path}`
   }`;
 };
 
-const refreshAccessToken =
-  async (): Promise<string | null> => {
-    const refresh =
-      getRefreshToken();
+const refreshAccessToken = async (): Promise<string | null> => {
+  const refresh = getRefreshToken();
 
-    if (!refresh) {
-      return null;
-    }
+  if (!refresh) {
+    return null;
+  }
 
-    try {
-      const response =
-        await fetch(
-          buildUrl(
-            '/api/auth/token/refresh/'
-          ),
-          {
-            method: 'POST',
-
-            headers: {
-              'Content-Type':
-                'application/json',
-            },
-
-            body: JSON.stringify({
-              refresh,
-            }),
-          }
-        );
-
-      if (!response.ok) {
-        clearTokens();
-        return null;
+  try {
+    const response = await fetch(
+      buildUrl('/api/auth/token/refresh/'),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          refresh,
+        }),
       }
+    );
 
-      const data =
-        await response.json();
-
-      if (!data.access) {
-        clearTokens();
-        return null;
-      }
-
-      localStorage.setItem(
-        ACCESS_TOKEN_KEY,
-        data.access
-      );
-
-      return data.access;
-    } catch {
+    if (!response.ok) {
       clearTokens();
       return null;
     }
-  };
+
+    const data = await response.json();
+
+    if (!data.access) {
+      clearTokens();
+      return null;
+    }
+
+    localStorage.setItem(
+      ACCESS_TOKEN_KEY,
+      data.access
+    );
+
+    return data.access;
+  } catch (error) {
+    console.error(
+      'Token refresh failed:',
+      error
+    );
+
+    clearTokens();
+    return null;
+  }
+};
 
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
   retry = true
 ): Promise<T> {
-  const url =
-    buildUrl(path);
+  const url = buildUrl(path);
 
-  const headers = new Headers(
-    options.headers
+  console.log(
+    `[API] ${options.method || 'GET'} ${url}`
   );
+
+  const headers = new Headers(options.headers);
 
   headers.set(
     'Content-Type',
     'application/json'
   );
 
-  const token =
-    getAccessToken();
+  const token = getAccessToken();
 
   if (token) {
     headers.set(
@@ -144,11 +117,23 @@ export async function apiFetch<T>(
     );
   }
 
-  const response =
-    await fetch(url, {
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
       ...options,
       headers,
     });
+  } catch (error) {
+    console.error(
+      `[API] Network error calling ${url}:`,
+      error
+    );
+
+    throw new Error(
+      `Unable to connect to the Reflex backend at ${API_BASE_URL}. Check that the backend is live and CORS allows this Vercel domain.`
+    );
+  }
 
   /*
    * Access token expired.
@@ -157,12 +142,8 @@ export async function apiFetch<T>(
   if (
     response.status === 401 &&
     retry &&
-    !path.includes(
-      '/api/auth/login/'
-    ) &&
-    !path.includes(
-      '/api/auth/token/refresh/'
-    )
+    !path.includes('/api/auth/login/') &&
+    !path.includes('/api/auth/token/refresh/')
   ) {
     const newToken =
       await refreshAccessToken();
@@ -179,22 +160,16 @@ export async function apiFetch<T>(
   }
 
   const contentType =
-    response.headers.get(
-      'content-type'
-    ) || '';
+    response.headers.get('content-type') || '';
 
   let data: any = null;
 
   if (
-    contentType.includes(
-      'application/json'
-    )
+    contentType.includes('application/json')
   ) {
-    data =
-      await response.json();
+    data = await response.json();
   } else {
-    const text =
-      await response.text();
+    const text = await response.text();
 
     data = text
       ? { message: text }
@@ -203,10 +178,10 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     throw new Error(
+      data?.detail ||
       data?.message ||
-        data?.detail ||
-        data?.error ||
-        `Request failed with status ${response.status}`
+      data?.error ||
+      `Request failed with status ${response.status}`
     );
   }
 
