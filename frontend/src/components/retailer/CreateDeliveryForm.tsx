@@ -60,19 +60,21 @@ export const CreateDeliveryForm: React.FC<{ onSuccess?: () => void }> = ({ onSuc
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (
+  e: React.FormEvent
+) => {
     e.preventDefault();
     if (!validate()) return;
 
-    createDelivery({
-      customer_name: customerName,
-      customer_phone: customerPhone,
-      customer_email: customerEmail.trim() || undefined,
-      delivery_address: deliveryAddress,
-      item_description: itemDescription,
-      expected_delivery_at: resolvedExpectedTime,
-      reference: reference.trim() || undefined,
-    });
+  await createDelivery({
+  customer_name: customerName,
+  customer_phone: customerPhone,
+  customer_email: customerEmail || undefined,
+  delivery_address: deliveryAddress,
+  item_description: itemDescription,
+  expected_delivery_at: resolvedExpectedTime,
+  reference: reference || undefined,
+});
 
     setCustomerName('');
     setCustomerPhone('');
