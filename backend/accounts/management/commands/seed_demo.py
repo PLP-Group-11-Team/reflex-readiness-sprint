@@ -11,38 +11,51 @@ class Command(BaseCommand):
     help = "Create demo users and sample deliveries for the Reflex prototype."
 
     def handle(self, *args, **options):
+        password = "ReflexDemo123!"
+
         # Demo users
         dispatcher, _ = User.objects.update_or_create(
-            email="dispatcher@reflex.demo",
+            email="dispatch@reflex.ke",
             defaults={
-                "name": "Demo Dispatcher",
+                "name": "Reflex Dispatcher",
                 "role": User.Role.DISPATCHER,
                 "is_active": True,
             },
         )
-        dispatcher.set_password("ReflexDemo123!")
+        dispatcher.set_password(password)
         dispatcher.save()
 
-        rider, _ = User.objects.update_or_create(
-            email="rider@reflex.demo",
+        brian, _ = User.objects.update_or_create(
+            email="brian@reflex.ke",
             defaults={
-                "name": "Demo Rider",
+                "name": "Brian",
                 "role": User.Role.RIDER,
                 "is_active": True,
             },
         )
-        rider.set_password("ReflexDemo123!")
-        rider.save()
+        brian.set_password(password)
+        brian.save()
+
+        james, _ = User.objects.update_or_create(
+            email="james@reflex.ke",
+            defaults={
+                "name": "James",
+                "role": User.Role.RIDER,
+                "is_active": True,
+            },
+        )
+        james.set_password(password)
+        james.save()
 
         retailer, _ = User.objects.update_or_create(
-            email="retailer@reflex.demo",
+            email="retailer@mwangaza.ke",
             defaults={
-                "name": "Demo Retailer",
+                "name": "Mwangaza Retailer",
                 "role": User.Role.RETAILER,
                 "is_active": True,
             },
         )
-        retailer.set_password("ReflexDemo123!")
+        retailer.set_password(password)
         retailer.save()
 
         # Sample delivery
@@ -72,8 +85,9 @@ class Command(BaseCommand):
                 "Reflex demo data created/updated successfully."
             )
         )
-        self.stdout.write("Dispatcher: dispatcher@reflex.demo")
-        self.stdout.write("Rider:      rider@reflex.demo")
-        self.stdout.write("Retailer:   retailer@reflex.demo")
+        self.stdout.write("Retailer:   retailer@mwangaza.ke")
+        self.stdout.write("Dispatcher: dispatch@reflex.ke")
+        self.stdout.write("Rider 1:    brian@reflex.ke")
+        self.stdout.write("Rider 2:    james@reflex.ke")
         self.stdout.write("Password:   ReflexDemo123!")
         self.stdout.write("Delivery:   REF-DEMO-001")
